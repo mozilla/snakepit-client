@@ -1,0 +1,30 @@
+{
+  "name": "snakepit-client",
+  "version": "0.0.1",
+  "description": "Snakepit job scheduler command line client",
+  "main": "src/cli.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mozilla/snakepit-client.git"
+  },
+  "keywords": [
+    "snakepit",
+    "client",
+    "cli",
+    "command",
+    "line",
+    "job",
+    "scheduler",
+    "machine",
+    "learning"
+  ],
+  "author": "Tilman Kamp",
+  "license": "MPL-2.0",
+  "bugs": {
+    "url": "https://github.com/mozilla/snakepit-client/issues"
+  },
+  "homepage": "https://github.com/mozilla/snakepit-client#readme"
+}
