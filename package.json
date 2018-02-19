@@ -29,5 +29,8 @@
   "bugs": {
     "url": "https://github.com/mozilla/snakepit-client/issues"
   },
-  "homepage": "https://github.com/mozilla/snakepit-client#readme"
+  "homepage": "https://github.com/mozilla/snakepit-client#readme",
+  "dependencies": {
+    "commander": "^2.14.1"
+  }
 }
