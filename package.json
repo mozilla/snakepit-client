@@ -31,6 +31,8 @@
   },
   "homepage": "https://github.com/mozilla/snakepit-client#readme",
   "dependencies": {
-    "commander": "^2.14.1"
+    "commander": "^2.14.1",
+    "password-prompt": "^1.0.3",
+    "readline-sync": "^1.4.9"
   }
 }
