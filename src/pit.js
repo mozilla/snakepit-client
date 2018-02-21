@@ -42,15 +42,19 @@ function runCommand(verb, resource, content, callback, params) {
             if(error) {
                 console.error('Unable to reach pit: ' + error.code)
                 process.exit(1)
-            }
-            if (callback instanceof Function) {
+            } else if (response.statusCode === 401) {
+                var password = readlineSync.question('Please enter password: ', { hideEchoBack: true })
+                authenticate(username, password, function() {
+                    sendRequest(verb, resource, content, callback, params)
+                })
+            } else if (callback instanceof Function) {
                 callback(response.statusCode, body)
             }
         })
     }
 
     function authenticate(username, password, callback) {
-        sendRequest('post', 'users/' + username + '/authenticate', { password: password }, function(response, body) {
+        sendRequest('post', 'users/' + username + '/authenticate', { password: password }, function(code, body) {
             if (code == 200) {
                 token = body.token
                 fs.writeFile(userFile, username + '\n' + token, function(err) {
@@ -58,11 +62,13 @@ function runCommand(verb, resource, content, callback, params) {
                         console.error('Unable to store user info: ' + err)
                         process.exit(1)
                     } else {
-                        callback()
+                        if (callback instanceof Function) {
+                            callback()
+                        }
                     }
                 })
             } else {
-                console.error('Unable to authenticate.')
+                console.error('Unable to authenticate. If user "' + username + '" is not valid anymore, remove ".pituser.txt" from this directory or your home folder and start over.')
                 process.exit(1)
             }
         })
