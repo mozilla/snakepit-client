@@ -4,7 +4,6 @@ const os = require('os')
 const path = require('path')
 const program = require('commander')
 const request = require('request')
-const prompt = require('password-prompt')
 const readlineSync = require('readline-sync')
 
 
@@ -39,12 +38,20 @@ function runCommand(verb, resource, content, callback, params) {
             headers: { 'X-Auth-Token': token },
             json: !!content,
             body: content
-        }, callback)
+        }, function(error, response, body) {
+            if(error) {
+                console.error('Unable to reach pit: ' + error.code)
+                process.exit(1)
+            }
+            if (callback instanceof Function) {
+                callback(response.statusCode, body)
+            }
+        })
     }
 
     function authenticate(username, password, callback) {
-        sendRequest('post', 'users/' + username + '/authenticate', { password: password }, function(error, response, body) {
-            if (response.statusCode == 200) {
+        sendRequest('post', 'users/' + username + '/authenticate', { password: password }, function(response, body) {
+            if (code == 200) {
                 token = body.token
                 fs.writeFile(userFile, username + '\n' + token, function(err) {
                     if(err) {
@@ -78,12 +85,12 @@ function runCommand(verb, resource, content, callback, params) {
             console.log('No user info found. Seems like a new user or first time login from this machine.')
             username = readlineSync.question('Please enter an existing or new username: ')
             var userPath = 'users/' + username
-            sendRequest('get', userPath + '/exists', undefined, function(error, response, body) {
-                if (response.statusCode == 200) {
+            sendRequest('get', userPath + '/exists', undefined, function(code, body) {
+                if (code == 200) {
                     console.log('The user already exists.')
                     var password = readlineSync.question('Please enter password (or Ctrl-C to abort): ', { hideEchoBack: true })
                     authenticate(username, password, sendCommand)
-                } else if(response.statusCode == 404) {
+                } else {
                     console.log('Found no user of that name.')
                     var register = readlineSync.question('Do you want to register this usename (yes|no)? ', { trueValue: ['yes', 'y'], falseValue: ['no', 'n'] })
                     if (register) {
@@ -91,8 +98,8 @@ function runCommand(verb, resource, content, callback, params) {
                         var email = readlineSync.questionEMail('E-Mail address: ')
                         var password = readlineSync.questionNewPassword('New password: ')
                         var user = { fullname: fullname, email: email, password: password }
-                        sendRequest('put', userPath, user, function(error, response, body) {
-                            if (response.statusCode == 200) {
+                        sendRequest('put', userPath, user, function(code, body) {
+                            if (code == 200) {
                                 authenticate(username, password, sendCommand)
                             } else {
                                 console.error('Unable to register user.')
@@ -102,8 +109,6 @@ function runCommand(verb, resource, content, callback, params) {
                     } else {
                         exit(0)
                     }
-                } else {
-                    console.error(response.statusCode)
                 }
             })
         } else {
@@ -129,6 +134,6 @@ program
 
 program.parse(process.argv)
 
-runCommand('get', 'users', null, function(error, response, body) {
+runCommand('get', 'users', null, function(code, body) {
     console.log(body)
 })
