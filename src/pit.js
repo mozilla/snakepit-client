@@ -31,12 +31,17 @@ function runCommand(verb, resource, content, callback, params) {
     var token = ''
 
     function sendRequest(verb, resource, content, callback, params) {
+        if (content instanceof Function) {
+            params = callback
+            callback = content
+            content = undefined
+        }
         var resourceUrl = pitUrl + '/' + resource
         request[verb]({
             url: resourceUrl,
             agentOptions: agentOptions,
             headers: { 'X-Auth-Token': token },
-            json: !!content,
+            json: true,
             body: content
         }, function(error, response, body) {
             if(error) {
@@ -48,6 +53,7 @@ function runCommand(verb, resource, content, callback, params) {
                     sendRequest(verb, resource, content, callback, params)
                 })
             } else if (callback instanceof Function) {
+                var obj 
                 callback(response.statusCode, body)
             }
         })
@@ -91,7 +97,7 @@ function runCommand(verb, resource, content, callback, params) {
             console.log('No user info found. Seems like a new user or first time login from this machine.')
             username = readlineSync.question('Please enter an existing or new username: ')
             var userPath = 'users/' + username
-            sendRequest('get', userPath + '/exists', undefined, function(code, body) {
+            sendRequest('get', userPath + '/exists', function(code, body) {
                 if (code == 200) {
                     console.log('The user already exists.')
                     var password = readlineSync.question('Please enter password (or Ctrl-C to abort): ', { hideEchoBack: true })
@@ -138,8 +144,24 @@ program
         var watch = options.watch
     })
 
+program
+    .command('show <entity>')
+    .description('Shows information about an entity. Possible values for entity: "users", "jobs", "nodes", "user:<username>", "job:<job-number>", "node:<node-name>"')
+    .action(function(entity, options) {
+        if(entity === 'users') {
+            runCommand('get', 'users', undefined, function(code, body) {
+                body.forEach(user => console.log(user))
+            })
+        } else if (entity === 'jobs') {
+            
+        } else {
+            console.log('Unknown entity')
+        }
+    })
+
 program.parse(process.argv)
 
-runCommand('get', 'users', null, function(code, body) {
-    console.log(body)
-})
+if (!process.argv.slice(2).length) {
+    program.outputHelp();
+}
+
