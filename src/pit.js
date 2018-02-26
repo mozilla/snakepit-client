@@ -53,7 +53,7 @@ function runCommand(verb, resource, content, callback, params) {
                     sendRequest(verb, resource, content, callback, params)
                 })
             } else if (callback instanceof Function) {
-                var obj 
+                var obj
                 callback(response.statusCode, body)
             }
         })
@@ -133,30 +133,156 @@ function runCommand(verb, resource, content, callback, params) {
     }
 }
 
+const indent = '  '
+const entityUser = 'user:<username>'
+const entityNode = 'node:<node name>'
+const entityJob = 'node:<job number>'
+
+function printLine(msg) {
+    console.log(msg ? (indent + (msg || '')) : '')
+}
+
+function printIntro() {
+    printLine()
+    printLine(indent + 'Examples:')
+    printLine()
+}
+
+function printEntityHelp() {
+    printLine('Accepted values for "entity": ' + Array.prototype.slice.call(arguments).join(', ') + '.')
+}
+
+function printPropertyHelp() {
+    printLine('Properties are pairs of property-name and value of the form "property=value".')
+}
+
+function printUserPropertyHelp() {
+    printLine('User properties: "fullname", "email", "password" (prompted if omitted).')
+}
+
+function printNodePropertyHelp() {
+    printLine('Node properties: "address" (mandatory), "port", "gpus" (comma separated CUDA indices), "user".')
+}
+
+function printExample(line) {
+    printLine(indent + '$ ' + line)
+}
+
 program
     .version('0.0.1')
 
 program
-    .command('run')
-    .description('enqueues current directory as new job')
-    .option("-w, --watch", "immediately starts watching the job")
-    .action(function(options) {
-        var watch = options.watch
+    .command('add <entity> [properties...]')
+    .description('adds an entity to the system')
+    .on('--help', function() {
+        printIntro()
+        printExample('pit add user:paul email=paul@x.y password=secret')
+        printExample('pit add node:machine1 address=192.168.2.2')
+        printLine()
+        printEntityHelp(entityUser, entityNode)
+        printPropertyHelp()
+        printUserPropertyHelp()
+        printNodePropertyHelp()
+    })
+    .action(function(entity, properties) {
+
+    })
+
+program
+    .command('remove <entity>')
+    .description('removes an entity from the system')
+    .option("-f, --force", "no security question")
+    .action(function(entity, options) {
+
+    })
+
+program
+    .command('set <entity> <properties...>')
+    .description('sets properties of an entity')
+    .on('--help', function() {
+        printIntro()
+        printExample('pit set user:paul email=new@x.y')
+        printExample('pit set node:machine1 address=192.168.2.1')
+        printLine()
+        printEntityHelp(entityUser, entityNode)
+        printPropertyHelp()
+        printUserPropertyHelp()
+        printNodePropertyHelp()
+    })
+    .action(function(entity, properties) {
+
+    })
+
+program
+    .command('get <entity> <property>')
+    .description('gets a property of an entity')
+    .on('--help', function() {
+        printIntro()
+        printExample('pit get user:paul email')
+        printExample('pit get node:machine1 address')
+        printLine()
+        printEntityHelp(entityUser, entityNode)
+        printPropertyHelp()
+        printUserPropertyHelp()
+        printNodePropertyHelp()
+    })
+    .action(function(entity, property) {
+
     })
 
 program
     .command('show <entity>')
-    .description('Shows information about an entity. Possible values for entity: "users", "jobs", "nodes", "user:<username>", "job:<job-number>", "node:<node-name>"')
+    .description('shows info about an entity')
+    .on('--help', function() {
+        printIntro()
+        printExample('pit show users')
+        printExample('pit show nodes')
+        printExample('pit show jobs')
+        printExample('pit show user:paul')
+        printExample('pit show node:machine1')
+        printExample('pit show job:235')
+        printLine()
+        printEntityHelp('users', 'nodes', 'jobs', entityUser, entityNode, entityJob)
+    })
     .action(function(entity, options) {
         if(entity === 'users') {
             runCommand('get', 'users', undefined, function(code, body) {
                 body.forEach(user => console.log(user))
             })
         } else if (entity === 'jobs') {
-            
+
         } else {
             console.log('Unknown entity')
         }
+    })
+
+program
+    .command('watch [entity]')
+    .description('continuously watches job\'s log output, job backlog, cluster stats or node stats')
+    .on('--help', function() {
+        printIntro()
+        printExample('pit watch')
+        printExample('pit watch jobs')
+        printExample('pit watch job:5576')
+        printExample('pit watch nodes')
+        printExample('pit watch node:machine1')
+        printLine()
+        printEntityHelp('nodes', 'jobs', entityNode, entityJob)
+    })
+    .action(function(options) {
+
+    })
+
+program
+    .command('run')
+    .description('enqueues current directory as new job')
+    .option("-w, --watch", "immediately starts watching the job")
+    .on('--help', function() {
+        printIntro()
+        printExample('pit run')
+    })
+    .action(function(options) {
+
     })
 
 program.parse(process.argv)
