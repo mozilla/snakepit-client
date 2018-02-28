@@ -7,7 +7,34 @@ const request = require('request')
 const readlineSync = require('readline-sync')
 
 
+function promptUserInfo(user) {
+    user = user || {}
+    if (!user.fullname) {
+        user.fullname = readlineSync.question('Full name: ')
+    }
+    if (!user.email) {
+        user.email = readlineSync.questionEMail('E-Mail address: ')
+    }
+    if (!user.password) {
+        user.password = readlineSync.questionNewPassword('New password: ')
+    }
+    return user
+}
+
+function promptNodeInfo(node) {
+    node = node || {}
+    if (!node.address) {
+        node.address = readlineSync.question('Node\'s domain name or IP address: ')
+    }
+    return node
+}
+
 function runCommand(verb, resource, content, callback, params) {
+    if (content instanceof Function) {
+        params = callback
+        callback = content
+        content = undefined
+    }
     var connectFile = '.pitconnect.txt'
     if(!fs.existsSync(connectFile)) {
         connectFile = path.join(os.homedir(), connectFile)
@@ -53,7 +80,6 @@ function runCommand(verb, resource, content, callback, params) {
                     sendRequest(verb, resource, content, callback, params)
                 })
             } else if (callback instanceof Function) {
-                var obj
                 callback(response.statusCode, body)
             }
         })
@@ -106,10 +132,7 @@ function runCommand(verb, resource, content, callback, params) {
                     console.log('Found no user of that name.')
                     var register = readlineSync.question('Do you want to register this usename (yes|no)? ', { trueValue: ['yes', 'y'], falseValue: ['no', 'n'] })
                     if (register) {
-                        var fullname = readlineSync.question('Full name: ')
-                        var email = readlineSync.questionEMail('E-Mail address: ')
-                        var password = readlineSync.questionNewPassword('New password: ')
-                        var user = { fullname: fullname, email: email, password: password }
+                        user = promptUserInfo()
                         sendRequest('put', userPath, user, function(code, body) {
                             if (code == 200) {
                                 authenticate(username, password, sendCommand)
@@ -137,6 +160,21 @@ const indent = '  '
 const entityUser = 'user:<username>'
 const entityNode = 'node:<node name>'
 const entityJob = 'node:<job number>'
+
+const entityDescriptors = {
+    'user': {
+        'id': 'Username',
+        'fullname': 'Full name',
+        'email': 'E-Mail address'
+    },
+    'node': {
+        'id': 'Node name',
+        'addresss': 'Address',
+        'port': 'Port',
+        'user': 'Remote user',
+        'gpus': 'GPUs'
+    }
+}
 
 function printLine(msg) {
     console.log(msg ? (indent + (msg || '')) : '')
@@ -168,6 +206,37 @@ function printExample(line) {
     printLine(indent + '$ ' + line)
 }
 
+function splitPair(value, separator, name1, name2) {
+    var obj = {}
+    value = value.split(separator)
+    if (value.length == 2) {
+        obj[name1] = value[0]
+        obj[name2] = value[1]
+    }
+    return obj
+}
+
+function parseEntity(entity) {
+    return splitPair(entity, ':', 'type', 'id')
+}
+
+function parseAssignment(assignment) {
+    return splitPair(assignment, '=', 'property', 'value')
+}
+
+function fail(message) {
+    console.error('Command failed: ' + message)
+    process.exit(1)
+}
+
+function stdCallback(code, body) {
+    if (code == 409) {
+        fail('Not allowed')
+    } else if (code > 299) {
+        fail(code)
+    }
+}
+
 program
     .version('0.0.1')
 
@@ -185,23 +254,51 @@ program
         printNodePropertyHelp()
     })
     .action(function(entity, properties) {
-
+        var obj = {}
+        entity = parseEntity(entity)
+        if(entity.type == 'user' || entity.type == 'node') {
+            if (properties) {
+                properties.forEach(assignment => {
+                    assignment = parseAssignment(assignment)
+                    obj[assignment.property] = assignment.value
+                })
+            }
+            if (entity.type == 'user') {
+                obj = promptUserInfo(obj)
+            } else {
+                obj = promptNodeInfo(obj)
+            }
+            runCommand('put', entity.type + 's/' + entity.id, obj, stdCallback)
+        } else {
+            fail('Unknown entity type "' + entity.type + '"')
+        }
     })
 
 program
     .command('remove <entity>')
     .description('removes an entity from the system')
-    .option("-f, --force", "no security question")
-    .action(function(entity, options) {
-
+    .on('--help', function() {
+        printIntro()
+        printExample('pit remove user:paul')
+        printExample('pit remove node:machine1')
+        printLine()
+        printEntityHelp(entityUser, entityNode)
+    })
+    .action(function(entity) {
+        entity = parseEntity(entity)
+        if(entity.type == 'user' || entity.type == 'node') {
+            runCommand('del', entity.type + 's/' + entity.id, stdCallback)
+        } else {
+            fail('Unsupported entity type "' + entity.type + '"')
+        }
     })
 
 program
-    .command('set <entity> <properties...>')
+    .command('set <entity> <assignments...>')
     .description('sets properties of an entity')
     .on('--help', function() {
         printIntro()
-        printExample('pit set user:paul email=new@x.y')
+        printExample('pit set user:paul email=x@y.z fullname="Paul Smith"')
         printExample('pit set node:machine1 address=192.168.2.1')
         printLine()
         printEntityHelp(entityUser, entityNode)
@@ -209,8 +306,18 @@ program
         printUserPropertyHelp()
         printNodePropertyHelp()
     })
-    .action(function(entity, properties) {
-
+    .action(function(entity, assignments) {
+        var obj = {}
+        entity = parseEntity(entity)
+        if(entity.type == 'user' || entity.type == 'node') {
+            assignments.forEach(assignment => {
+                assignment = parseAssignment(assignment)
+                obj[assignment.property] = assignment.value
+            })
+            runCommand('put', entity.type + 's/' + entity.id, obj, stdCallback)
+        } else {
+            fail('Unsupported entity type "' + entity.type + '"')
+        }
     })
 
 program
@@ -245,14 +352,29 @@ program
         printEntityHelp('users', 'nodes', 'jobs', entityUser, entityNode, entityJob)
     })
     .action(function(entity, options) {
-        if(entity === 'users') {
-            runCommand('get', 'users', undefined, function(code, body) {
-                body.forEach(user => console.log(user))
+        if(entity === 'users' || entity === 'nodes' || entity === 'jobs') {
+            runCommand('get', entity, function(code, body) {
+                body.forEach(obj => console.log(obj))
             })
-        } else if (entity === 'jobs') {
-
         } else {
-            console.log('Unknown entity')
+            entity = parseEntity(entity)
+            var descriptor = entityDescriptors[entity.type]
+            if(descriptor) {
+                runCommand('get', entity.type + 's/' + entity.id, function(code, body) {
+                    if (code == 200) {
+                        for (var property in body) {
+                            if (body.hasOwnProperty(property)) {
+                                var name = descriptor[property] || property
+                                console.log(name + ': ' + body[property])
+                            }
+                        }
+                    } else {
+                        stdCallback(code, body)
+                    }
+                })
+            } else {
+                fail('Unsupported entity type "' + entity.type + '"')
+            }
         }
     })
 
