@@ -165,7 +165,8 @@ const entityDescriptors = {
     'user': {
         'id': 'Username',
         'fullname': 'Full name',
-        'email': 'E-Mail address'
+        'email': 'E-Mail address',
+        'admin': 'Is administrator'
     },
     'node': {
         'id': 'Node name',
@@ -195,7 +196,7 @@ function printPropertyHelp() {
 }
 
 function printUserPropertyHelp() {
-    printLine('User properties: "fullname", "email", "password" (prompted if omitted).')
+    printLine('User properties: "fullname", "email", "password" (prompted if omitted), "admin" ("yes" or "no").')
 }
 
 function printNodePropertyHelp() {
@@ -229,7 +230,7 @@ function fail(message) {
     process.exit(1)
 }
 
-function stdCallback(code, body) {
+function evaluateResponse(code, body) {
     if (code == 409) {
         fail('Not allowed')
     } else if (code > 299) {
@@ -268,7 +269,7 @@ program
             } else {
                 obj = promptNodeInfo(obj)
             }
-            runCommand('put', entity.type + 's/' + entity.id, obj, stdCallback)
+            runCommand('put', entity.type + 's/' + entity.id, obj, evaluateResponse)
         } else {
             fail('Unknown entity type "' + entity.type + '"')
         }
@@ -276,6 +277,7 @@ program
 
 program
     .command('remove <entity>')
+    .alias('rm')
     .description('removes an entity from the system')
     .on('--help', function() {
         printIntro()
@@ -287,7 +289,7 @@ program
     .action(function(entity) {
         entity = parseEntity(entity)
         if(entity.type == 'user' || entity.type == 'node') {
-            runCommand('del', entity.type + 's/' + entity.id, stdCallback)
+            runCommand('del', entity.type + 's/' + entity.id, evaluateResponse)
         } else {
             fail('Unsupported entity type "' + entity.type + '"')
         }
@@ -314,7 +316,7 @@ program
                 assignment = parseAssignment(assignment)
                 obj[assignment.property] = assignment.value
             })
-            runCommand('put', entity.type + 's/' + entity.id, obj, stdCallback)
+            runCommand('put', entity.type + 's/' + entity.id, obj, evaluateResponse)
         } else {
             fail('Unsupported entity type "' + entity.type + '"')
         }
@@ -334,7 +336,19 @@ program
         printNodePropertyHelp()
     })
     .action(function(entity, property) {
-
+        entity = parseEntity(entity)
+        var descriptor = entityDescriptors[entity.type]
+        if(descriptor) {
+            runCommand('get', entity.type + 's/' + entity.id, function(code, body) {
+                if (code == 200) {
+                    console.log(body[property])
+                } else {
+                    evaluateResponse(code, body)
+                }
+            })
+        } else {
+            fail('Unsupported entity type "' + entity.type + '"')
+        }
     })
 
 program
@@ -342,6 +356,7 @@ program
     .description('shows info about an entity')
     .on('--help', function() {
         printIntro()
+        printExample('pit show me')
         printExample('pit show users')
         printExample('pit show nodes')
         printExample('pit show jobs')
@@ -349,15 +364,23 @@ program
         printExample('pit show node:machine1')
         printExample('pit show job:235')
         printLine()
-        printEntityHelp('users', 'nodes', 'jobs', entityUser, entityNode, entityJob)
+        printEntityHelp('me', 'users', 'nodes', 'jobs', entityUser, entityNode, entityJob)
     })
     .action(function(entity, options) {
         if(entity === 'users' || entity === 'nodes' || entity === 'jobs') {
             runCommand('get', entity, function(code, body) {
-                body.forEach(obj => console.log(obj))
+                if (code == 200) {
+                    body.forEach(obj => console.log(obj))
+                } else {
+                    evaluateResponse(code, body)
+                }
             })
         } else {
-            entity = parseEntity(entity)
+            if (entity == 'me') {
+                entity = { type: 'user', id: '~' }
+            } else {
+                entity = parseEntity(entity)
+            }
             var descriptor = entityDescriptors[entity.type]
             if(descriptor) {
                 runCommand('get', entity.type + 's/' + entity.id, function(code, body) {
@@ -369,7 +392,7 @@ program
                             }
                         }
                     } else {
-                        stdCallback(code, body)
+                        evaluateResponse(code, body)
                     }
                 })
             } else {
@@ -396,12 +419,13 @@ program
     })
 
 program
-    .command('run')
+    .command('put')
+    .alias('run')
     .description('enqueues current directory as new job')
     .option("-w, --watch", "immediately starts watching the job")
     .on('--help', function() {
         printIntro()
-        printExample('pit run')
+        printExample('pit put')
     })
     .action(function(options) {
 
