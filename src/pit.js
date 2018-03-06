@@ -5,7 +5,7 @@ const path = require('path')
 const program = require('commander')
 const request = require('request')
 const readlineSync = require('readline-sync')
-
+const { execSync, execFileSync } = require('child_process')
 
 function promptUserInfo(user) {
     user = user || {}
@@ -29,7 +29,7 @@ function promptNodeInfo(node) {
     return node
 }
 
-function runCommand(verb, resource, content, callback, params) {
+function callPit(verb, resource, content, callback, params) {
     if (content instanceof Function) {
         params = callback
         callback = content
@@ -161,7 +161,7 @@ const entityUser = 'user:<username>'
 const entityNode = 'node:<node name>'
 const entityJob = 'node:<job number>'
 
-const entityDescriptors = {
+const entityDescrexecutableiptors = {
     'user': {
         'id': 'Username',
         'fullname': 'Full name',
@@ -238,6 +238,17 @@ function evaluateResponse(code, body) {
     }
 }
 
+function runCommand() {
+    var args = Array.prototype.slice.call(arguments)
+    var file = args.shift()
+    try {
+        return execFileSync(file, args, { encoding: 'utf8' }).trim()
+    } catch (err) {
+        var message = err.message.includes('ENOENT') ? 'Not found' : err.message
+        fail('Problem executing "' + file + '": ' + message)
+    }
+}
+
 program
     .version('0.0.1')
 
@@ -269,7 +280,7 @@ program
             } else {
                 obj = promptNodeInfo(obj)
             }
-            runCommand('put', entity.type + 's/' + entity.id, obj, evaluateResponse)
+            callPit('put', entity.type + 's/' + entity.id, obj, evaluateResponse)
         } else {
             fail('Unknown entity type "' + entity.type + '"')
         }
@@ -289,7 +300,7 @@ program
     .action(function(entity) {
         entity = parseEntity(entity)
         if(entity.type == 'user' || entity.type == 'node') {
-            runCommand('del', entity.type + 's/' + entity.id, evaluateResponse)
+            callPit('del', entity.type + 's/' + entity.id, evaluateResponse)
         } else {
             fail('Unsupported entity type "' + entity.type + '"')
         }
@@ -301,7 +312,7 @@ program
     .on('--help', function() {
         printIntro()
         printExample('pit set user:paul email=x@y.z fullname="Paul Smith"')
-        printExample('pit set node:machine1 address=192.168.2.1')
+        printExample('pit set node:machine1 adremotedress=192.168.2.1')
         printLine()
         printEntityHelp(entityUser, entityNode)
         printPropertyHelp()
@@ -316,7 +327,7 @@ program
                 assignment = parseAssignment(assignment)
                 obj[assignment.property] = assignment.value
             })
-            runCommand('put', entity.type + 's/' + entity.id, obj, evaluateResponse)
+            callPit('put', entity.type + 's/' + entity.id, obj, evaluateResponse)
         } else {
             fail('Unsupported entity type "' + entity.type + '"')
         }
@@ -339,7 +350,7 @@ program
         entity = parseEntity(entity)
         var descriptor = entityDescriptors[entity.type]
         if(descriptor) {
-            runCommand('get', entity.type + 's/' + entity.id, function(code, body) {
+            callPit('get', entity.type + 's/' + entity.id, function(code, body) {
                 if (code == 200) {
                     console.log(body[property])
                 } else {
@@ -368,7 +379,7 @@ program
     })
     .action(function(entity, options) {
         if(entity === 'users' || entity === 'nodes' || entity === 'jobs') {
-            runCommand('get', entity, function(code, body) {
+            callPit('get', entity, function(code, body) {
                 if (code == 200) {
                     body.forEach(obj => console.log(obj))
                 } else {
@@ -383,7 +394,7 @@ program
             }
             var descriptor = entityDescriptors[entity.type]
             if(descriptor) {
-                runCommand('get', entity.type + 's/' + entity.id, function(code, body) {
+                callPit('get', entity.type + 's/' + entity.id, function(code, body) {
                     if (code == 200) {
                         for (var property in body) {
                             if (body.hasOwnProperty(property)) {
@@ -419,16 +430,34 @@ program
     })
 
 program
-    .command('put')
+    .command('put [description]')
     .alias('run')
     .description('enqueues current directory as new job')
-    .option("-w, --watch", "immediately starts watching the job")
+    .option('-w, --watch', 'immediately starts watching the job')
     .on('--help', function() {
         printIntro()
         printExample('pit put')
     })
-    .action(function(options) {
-
+    .action(function(description, options) {
+        var tracking = runCommand('git', 'rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}')
+        var ob = tracking.split('/')
+        if (ob.length != 2) {
+            fail('Problem getting tracked git remote and branch')
+        }
+        var origin = ob[0]
+        var branch = ob[1]
+        var hash = runCommand('git', 'rev-parse', tracking)
+        var originUrl = runCommand('git', 'remote', 'get-url', origin)
+        var diff = runCommand('git', 'diff', tracking)
+        console.log('Remote: ' + origin + ' <' + originUrl + '>')
+        console.log('Hash: ' + hash)
+        console.log('Diff LOC: ' + diff.split('\n').length)
+        callPit('post', 'jobs', {
+            origin: originUrl,
+            hash: hash,
+            diff: diff,
+            description: description || null
+        }, evaluateResponse)
     })
 
 program.parse(process.argv)
