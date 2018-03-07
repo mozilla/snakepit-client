@@ -161,7 +161,7 @@ const entityUser = 'user:<username>'
 const entityNode = 'node:<node name>'
 const entityJob = 'node:<job number>'
 
-const entityDescrexecutableiptors = {
+const entityDescriptors = {
     'user': {
         'id': 'Username',
         'fullname': 'Full name',
