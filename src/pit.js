@@ -29,6 +29,14 @@ function promptNodeInfo(node) {
     return node
 }
 
+function promptAliasInfo(alias) {
+    alias = alias || {}
+    if (!alias.model) {
+        alias.model = readlineSync.question('Exact model name: ')
+    }
+    return alias
+}
+
 function callPit(verb, resource, content, callback, params) {
     if (content instanceof Function) {
         params = callback
@@ -160,6 +168,7 @@ const indent = '  '
 const entityUser = 'user:<username>'
 const entityNode = 'node:<node name>'
 const entityJob = 'node:<job number>'
+const entityAlias = 'alias:<alias>'
 
 const entityDescriptors = {
     'user': {
@@ -174,6 +183,9 @@ const entityDescriptors = {
         'port': 'Port',
         'user': 'Remote user',
         'gpus': 'GPUs'
+    },
+    'alias': {
+        'model': 'Model name'
     }
 }
 
@@ -200,7 +212,11 @@ function printUserPropertyHelp() {
 }
 
 function printNodePropertyHelp() {
-    printLine('Node properties: "address" (mandatory), "port", "gpus" (comma separated CUDA indices), "user".')
+    printLine('Node properties: "address" (mandatory), "port", "cvd" (CUDA_VISIBLE_DEVICES), "user".')
+}
+
+function printAliasPropertyHelp() {
+    printLine('alias properties: "model".')
 }
 
 function printExample(line) {
@@ -218,11 +234,27 @@ function splitPair(value, separator, name1, name2) {
 }
 
 function parseEntity(entity) {
-    return splitPair(entity, ':', 'type', 'id')
+    pair = splitPair(entity, ':', 'type', 'id')
+    pair.plural = (pair.type == 'alias') ? 'aliases' : (pair.type + 's')
+    return pair
 }
 
 function parseAssignment(assignment) {
     return splitPair(assignment, '=', 'property', 'value')
+}
+
+function parseEntityProperties(entity, properties) {
+    let obj = {}
+    if (properties) {
+        properties.forEach(assignment => {
+            assignment = parseAssignment(assignment)
+            if (assignment.property == 'cvd') {
+                assignment.value = assignment.value.split(',').map(v => Number(v))
+            }
+            obj[assignment.property] = assignment.value
+        })
+    }
+    return obj
 }
 
 function fail(message) {
@@ -259,28 +291,26 @@ program
         printIntro()
         printExample('pit add user:paul email=paul@x.y password=secret')
         printExample('pit add node:machine1 address=192.168.2.2')
+        printExample('pit add alias:gtx1070 model="GeForce GTX 1070"')
         printLine()
         printEntityHelp(entityUser, entityNode)
         printPropertyHelp()
         printUserPropertyHelp()
         printNodePropertyHelp()
+        printAliasPropertyHelp()
     })
     .action(function(entity, properties) {
-        var obj = {}
         entity = parseEntity(entity)
-        if(entity.type == 'user' || entity.type == 'node') {
-            if (properties) {
-                properties.forEach(assignment => {
-                    assignment = parseAssignment(assignment)
-                    obj[assignment.property] = assignment.value
-                })
-            }
+        if(entity.type == 'user' || entity.type == 'node' || entity.type == 'alias') {
+            let obj = parseEntityProperties(entity, properties)
             if (entity.type == 'user') {
                 obj = promptUserInfo(obj)
-            } else {
+            } else if (entity.type == 'node') {
                 obj = promptNodeInfo(obj)
+            } else {
+                obj = promptAliasInfo(obj)
             }
-            callPit('put', entity.type + 's/' + entity.id, obj, evaluateResponse)
+            callPit('put', entity.plural + '/' + entity.id, obj, evaluateResponse)
         } else {
             fail('Unknown entity type "' + entity.type + '"')
         }
@@ -294,13 +324,14 @@ program
         printIntro()
         printExample('pit remove user:paul')
         printExample('pit remove node:machine1')
+        printExample('pit remove alias:gtx1070')
         printLine()
         printEntityHelp(entityUser, entityNode)
     })
     .action(function(entity) {
         entity = parseEntity(entity)
-        if(entity.type == 'user' || entity.type == 'node') {
-            callPit('del', entity.type + 's/' + entity.id, evaluateResponse)
+        if(entity.type == 'user' || entity.type == 'node' || entity.type == 'alias') {
+            callPit('del', entity.plural + '/' + entity.id, evaluateResponse)
         } else {
             fail('Unsupported entity type "' + entity.type + '"')
         }
@@ -313,21 +344,19 @@ program
         printIntro()
         printExample('pit set user:paul email=x@y.z fullname="Paul Smith"')
         printExample('pit set node:machine1 adremotedress=192.168.2.1')
+        printExample('pit set alias:gtx1070 model="GeForce GTX 1070"')
         printLine()
-        printEntityHelp(entityUser, entityNode)
+        printEntityHelp(entityUser, entityNode, entityAlias)
         printPropertyHelp()
         printUserPropertyHelp()
         printNodePropertyHelp()
+        printAliasPropertyHelp()
     })
     .action(function(entity, assignments) {
-        var obj = {}
         entity = parseEntity(entity)
         if(entity.type == 'user' || entity.type == 'node') {
-            assignments.forEach(assignment => {
-                assignment = parseAssignment(assignment)
-                obj[assignment.property] = assignment.value
-            })
-            callPit('put', entity.type + 's/' + entity.id, obj, evaluateResponse)
+            let obj = parseEntityProperties(entity, assignments)
+            callPit('put', entity.plural + '/' + entity.id, obj, evaluateResponse)
         } else {
             fail('Unsupported entity type "' + entity.type + '"')
         }
@@ -340,17 +369,19 @@ program
         printIntro()
         printExample('pit get user:paul email')
         printExample('pit get node:machine1 address')
+        printExample('pit get alias:gtx1070 model')
         printLine()
-        printEntityHelp(entityUser, entityNode)
+        printEntityHelp(entityUser, entityNode, entityAlias)
         printPropertyHelp()
         printUserPropertyHelp()
         printNodePropertyHelp()
+        printAliasPropertyHelp()
     })
     .action(function(entity, property) {
         entity = parseEntity(entity)
         var descriptor = entityDescriptors[entity.type]
         if(descriptor) {
-            callPit('get', entity.type + 's/' + entity.id, function(code, body) {
+            callPit('get', entity.plural + '/' + entity.id, function(code, body) {
                 if (code == 200) {
                     console.log(body[property])
                 } else {
@@ -371,14 +402,16 @@ program
         printExample('pit show users')
         printExample('pit show nodes')
         printExample('pit show jobs')
+        printExample('pit show aliases')
         printExample('pit show user:paul')
         printExample('pit show node:machine1')
         printExample('pit show job:235')
+        printExample('pit show alias:gtx1070')
         printLine()
-        printEntityHelp('me', 'users', 'nodes', 'jobs', entityUser, entityNode, entityJob)
+        printEntityHelp('me', 'users', 'nodes', 'jobs', 'aliases', entityUser, entityNode, entityJob, entityAlias)
     })
     .action(function(entity, options) {
-        if(entity === 'users' || entity === 'nodes' || entity === 'jobs') {
+        if(entity === 'users' || entity === 'nodes' || entity === 'jobs' || entity === 'aliases') {
             callPit('get', entity, function(code, body) {
                 if (code == 200) {
                     body.forEach(obj => console.log(obj))
@@ -394,7 +427,7 @@ program
             }
             var descriptor = entityDescriptors[entity.type]
             if(descriptor) {
-                callPit('get', entity.type + 's/' + entity.id, function(code, body) {
+                callPit('get', entity.plural + '/' + entity.id, function(code, body) {
                     if (code == 200) {
                         for (var property in body) {
                             if (body.hasOwnProperty(property)) {
