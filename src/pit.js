@@ -7,6 +7,11 @@ const request = require('request')
 const readlineSync = require('readline-sync')
 const { execSync, execFileSync } = require('child_process')
 
+const USER_FILE = '.pituser.txt'
+const CONNECT_FILE = '.pitconnect.txt'
+const REQUEST_FILE = '.pitrequest.txt'
+
+
 function promptUserInfo(user) {
     user = user || {}
     if (!user.fullname) {
@@ -31,8 +36,8 @@ function promptNodeInfo(node) {
 
 function promptAliasInfo(alias) {
     alias = alias || {}
-    if (!alias.model) {
-        alias.model = readlineSync.question('Exact model name: ')
+    if (!alias.name) {
+        alias.name = readlineSync.question('Exact resource name: ')
     }
     return alias
 }
@@ -43,13 +48,13 @@ function callPit(verb, resource, content, callback, params) {
         callback = content
         content = undefined
     }
-    var connectFile = '.pitconnect.txt'
+    var connectFile = CONNECT_FILE
     if(!fs.existsSync(connectFile)) {
         connectFile = path.join(os.homedir(), connectFile)
         if(!fs.existsSync(connectFile)) {
             console.error('Unable to find connectivity info about your pvar it.')
             console.error('If you know your pit\'s URL, use "pit connect <URL>" to configure the connection.')
-            console.error('If your pit admin provided a ".pitconnect.txt" file, place it either in your home directory (as default pit) or the (overruling) project root.')
+            console.error('If your pit admin provided a "' + CONNNECT_FILE + '" file, place it either in your home directory (as default pit) or the (overruling) project root.')
             process.exit(1)
         }
     }
@@ -61,7 +66,7 @@ function callPit(verb, resource, content, callback, params) {
         agentOptions = { ca: connectContent.join('\n') }
     }
 
-    var userFile = '.pituser.txt'
+    var userFile = USER_FILE
     var username
     var token = ''
 
@@ -108,7 +113,7 @@ function callPit(verb, resource, content, callback, params) {
                     }
                 })
             } else {
-                console.error('Unable to authenticate. If user "' + username + '" is not valid anymore, remove ".pituser.txt" from this directory or your home folder and start over.')
+                console.error('Unable to authenticate. If user "' + username + '" is not valid anymore, remove "' + USER_FILE + '" from this directory or your home folder and start over.')
                 process.exit(1)
             }
         })
@@ -127,7 +132,7 @@ function callPit(verb, resource, content, callback, params) {
     if(!fs.existsSync(userFile)) {
         userFile = path.join(os.homedir(), userFile)
         if(!fs.existsSync(userFile)) {
-            userFile = '.pituser.txt'
+            userFile = USER_FILE
             console.log('No user info found. Seems like a new user or first time login from this machine.')
             username = readlineSync.question('Please enter an existing or new username: ')
             var userPath = 'users/' + username
@@ -185,7 +190,7 @@ const entityDescriptors = {
         'gpus': 'GPUs'
     },
     'alias': {
-        'model': 'Model name'
+        'name': 'Resource\'s name'
     }
 }
 
@@ -216,7 +221,7 @@ function printNodePropertyHelp() {
 }
 
 function printAliasPropertyHelp() {
-    printLine('alias properties: "model".')
+    printLine('alias properties: "name".')
 }
 
 function printExample(line) {
@@ -291,7 +296,7 @@ program
         printIntro()
         printExample('pit add user:paul email=paul@x.y password=secret')
         printExample('pit add node:machine1 address=192.168.2.2')
-        printExample('pit add alias:gtx1070 model="GeForce GTX 1070"')
+        printExample('pit add alias:gtx1070 name="GeForce GTX 1070"')
         printLine()
         printEntityHelp(entityUser, entityNode)
         printPropertyHelp()
@@ -324,13 +329,14 @@ program
         printIntro()
         printExample('pit remove user:paul')
         printExample('pit remove node:machine1')
+        printExample('pit remove job:123')
         printExample('pit remove alias:gtx1070')
         printLine()
-        printEntityHelp(entityUser, entityNode)
+        printEntityHelp(entityUser, entityNode, entityJob, entityAlias)
     })
     .action(function(entity) {
         entity = parseEntity(entity)
-        if(entity.type == 'user' || entity.type == 'node' || entity.type == 'alias') {
+        if(entity.type == 'user' || entity.type == 'node' || entity.type == 'job' || entity.type == 'alias') {
             callPit('del', entity.plural + '/' + entity.id, evaluateResponse)
         } else {
             fail('Unsupported entity type "' + entity.type + '"')
@@ -344,7 +350,7 @@ program
         printIntro()
         printExample('pit set user:paul email=x@y.z fullname="Paul Smith"')
         printExample('pit set node:machine1 adremotedress=192.168.2.1')
-        printExample('pit set alias:gtx1070 model="GeForce GTX 1070"')
+        printExample('pit set alias:gtx1070 name="GeForce GTX 1070"')
         printLine()
         printEntityHelp(entityUser, entityNode, entityAlias)
         printPropertyHelp()
@@ -369,7 +375,7 @@ program
         printIntro()
         printExample('pit get user:paul email')
         printExample('pit get node:machine1 address')
-        printExample('pit get alias:gtx1070 model')
+        printExample('pit get alias:gtx1070 name')
         printLine()
         printEntityHelp(entityUser, entityNode, entityAlias)
         printPropertyHelp()
@@ -463,15 +469,22 @@ program
     })
 
 program
-    .command('put [description]')
+    .command('put [clusterRequest]')
     .alias('run')
     .description('enqueues current directory as new job')
+    .option('-m, --message', 'short description of the job')
     .option('-w, --watch', 'immediately starts watching the job')
     .on('--help', function() {
         printIntro()
-        printExample('pit put')
+        printExample('pit put 2:(8:gtx1070)')
+        printLine()
+        printLine('"clusterRequest" is an expression to specify resources this job requires from the cluster.')
+        printLine('It\'s a comma separated list of "process requests".')
+        printLine('Each "process request" specifies the number of process instances and (divided by colon and in braces) which resources to allocate for one process instances (on one node).')
+        printLine('The example above will allocate 2 process instances. For each process, 8 "gtx1070" resources will get allocated.')
+        printLine('You can also provide a "' + REQUEST_FILE + '" file with the same content in your project root as default value.')
     })
-    .action(function(description, options) {
+    .action(function(clusterRequest, options) {
         var tracking = runCommand('git', 'rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}')
         var ob = tracking.split('/')
         if (ob.length != 2) {
@@ -482,14 +495,22 @@ program
         var hash = runCommand('git', 'rev-parse', tracking)
         var originUrl = runCommand('git', 'remote', 'get-url', origin)
         var diff = runCommand('git', 'diff', tracking)
+        if (!clusterRequest && fs.existsSync(REQUEST_FILE)) {
+            clusterRequest = fs.readFileSync(REQUEST_FILE, 'utf-8').trim()
+        }
+        if (!clusterRequest) {
+            fail('No resources requested from cluster. Please provide them either through command line or through a "' + REQUEST_FILE + '" file in your project root.')
+        }
         console.log('Remote: ' + origin + ' <' + originUrl + '>')
         console.log('Hash: ' + hash)
         console.log('Diff LOC: ' + diff.split('\n').length)
+        console.log('Requested cluster resources: "' + clusterRequest + '"')
         callPit('post', 'jobs', {
             origin: originUrl,
             hash: hash,
             diff: diff,
-            description: description || null
+            clusterRequest: clusterRequest,
+            description: options.message || null
         }, evaluateResponse)
     })
 
