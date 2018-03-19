@@ -230,10 +230,12 @@ function printExample(line) {
 
 function splitPair(value, separator, name1, name2) {
     var obj = {}
-    value = value.split(separator)
-    if (value.length == 2) {
-        obj[name1] = value[0]
-        obj[name2] = value[1]
+    var parts = value.split(separator)
+    if (parts.length == 2) {
+        obj[name1] = parts[0]
+        obj[name2] = parts[1]
+    } else {
+        obj[name1] = value
     }
     return obj
 }
