@@ -496,7 +496,7 @@ program
         var branch = ob[1]
         var hash = runCommand('git', 'rev-parse', tracking)
         var originUrl = runCommand('git', 'remote', 'get-url', origin)
-        var diff = runCommand('git', 'diff', tracking)
+        var diff = runCommand('git', 'diff', '--no-prefix', tracking)
         if (!clusterRequest && fs.existsSync(REQUEST_FILE)) {
             clusterRequest = fs.readFileSync(REQUEST_FILE, 'utf-8').trim()
         }
