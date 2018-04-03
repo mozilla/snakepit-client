@@ -6,11 +6,12 @@ const program = require('commander')
 const request = require('request')
 const readlineSync = require('readline-sync')
 const { execSync, execFileSync } = require('child_process')
+const Table = require('cli-table2')
+//const colors = require('colors/safe')
 
 const USER_FILE = '.pituser.txt'
 const CONNECT_FILE = '.pitconnect.txt'
 const REQUEST_FILE = '.pitrequest.txt'
-
 
 function promptUserInfo(user) {
     user = user || {}
@@ -169,6 +170,36 @@ function callPit(verb, resource, content, callback, params) {
     }
 }
 
+const jobStates = {
+    PREPARING: 0,
+    WAITING: 1,
+    STARTING: 2,
+    RUNNING: 3,
+    STOPPING: 4,
+    DONE: 5,
+    FAILED: 6
+}
+
+//const jobStateNames = [
+//    colors.yellow('PRE'),
+//    'WAI',
+//    colors.yellow('STA'),
+//    colors.green('RUN'),
+//    colors.grey('STO'),
+//    'FIN',
+//    colors.red('ERR')
+//]
+
+const jobStateNames = [
+    'PRE',
+    'WAI',
+    'STA',
+    'RUN',
+    'STO',
+    'FIN',
+    'ERR'
+]
+
 const indent = '  '
 const entityUser = 'user:<username>'
 const entityNode = 'node:<node name>'
@@ -224,7 +255,7 @@ function printAliasPropertyHelp() {
     printLine('alias properties: "name".')
 }
 
-function printExample(line) {
+function printExample(line) {https://github.com/jamestalmage/cli-table2/blob/master/advanced-usage.md
     printLine(indent + '$ ' + line)
 }
 
@@ -454,23 +485,17 @@ program
     })
 
 program
-    .command('watch [entity]')
-    .description('continuously watches job\'s log output, job backlog, cluster stats or node stats')
+    .command('stop <jobNumber>')
+    .description('stops a running job')
     .on('--help', function() {
         printIntro()
-        printExample('pit watch')
-        printExample('pit watch jobs')
-        printExample('pit watch job:5576')
-        printExample('pit watch nodes')
-        printExample('pit watch node:machine1')
-        printLine()
-        printEntityHelp('nodes', 'jobs', entityNode, entityJob)
+        printExample('pit stop 1234')
     })
-    .action(function(options) {
-
+    .action(function(jobNumber) {
+        callPit('post', 'jobs/' + jobNumber + '/stop', evaluateResponse)
     })
 
-program
+    program
     .command('put [clusterRequest]')
     .alias('run')
     .description('enqueues current directory as new job')
@@ -514,6 +539,50 @@ program
             clusterRequest: clusterRequest,
             description: options.message || null
         }, evaluateResponse)
+    })
+
+program
+    .command('watch [jobNumber]')
+    .description('continuously watches job\'s log output')
+    .on('--help', function() {
+        printIntro()
+        printExample('pit watch 1234')
+    })
+    .action(function(jobNumber) {
+
+    })
+
+program
+    .command('status')
+    .alias('jobs')
+    .description('prints a job status report')
+    .on('--help', function() {
+        printIntro()
+        printExample('pit status')
+    })
+    .action(function() {
+        callPit('get', 'jobs', function(code, jobs) {
+            if (code == 200) {
+                let table = new Table({
+                    head: ['Job', 'Status', 'User', 'Description', 'Resources'],
+                    style: { head: [], border: [] },
+                    colWidths: [6, 8, 12, 40]
+                })
+                for(let job of jobs) {
+                    table.push([
+                        job.id,
+                        jobStateNames[job.state],
+                        job.user,
+                        job.description,
+                        job.state >= jobStates.STARTING && job.state <= jobStates.STOPPING ? job.clusterReservation : job.clusterRequest,
+                    ])
+                    //job.schedulePosition
+                }
+                console.log(table.toString())
+            } else {
+                evaluateResponse(code, body)
+            }
+        })
     })
 
 program.parse(process.argv)
