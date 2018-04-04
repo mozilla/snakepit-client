@@ -549,7 +549,7 @@ program
         printExample('pit watch 1234')
     })
     .action(function(jobNumber) {
-
+        callPit('get', 'jobs/' + jobNumber + '/watch', evaluateResponse)
     })
 
 program
