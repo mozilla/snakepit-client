@@ -7,11 +7,16 @@ const request = require('request')
 const readlineSync = require('readline-sync')
 const { execSync, execFileSync } = require('child_process')
 const Table = require('cli-table2')
-//const colors = require('colors/safe')
+const blessed = require('blessed')
 
 const USER_FILE = '.pituser.txt'
 const CONNECT_FILE = '.pitconnect.txt'
 const REQUEST_FILE = '.pitrequest.txt'
+
+function fail(message) {
+    console.error('Command failed: ' + message)
+    process.exit(1)
+}
 
 function promptUserInfo(user) {
     user = user || {}
@@ -43,9 +48,9 @@ function promptAliasInfo(alias) {
     return alias
 }
 
-function callPit(verb, resource, content, callback, params) {
+function callPit(verb, resource, content, callback, asStream) {
     if (content instanceof Function) {
-        params = callback
+        asStream = callback
         callback = content
         content = undefined
     }
@@ -71,30 +76,44 @@ function callPit(verb, resource, content, callback, params) {
     var username
     var token = ''
 
-    function sendRequest(verb, resource, content, callback, params) {
+    function sendRequest(verb, resource, content, callback, asStream) {
         if (content instanceof Function) {
-            params = callback
+            asStream = callback
             callback = content
             content = undefined
         }
-        var resourceUrl = pitUrl + '/' + resource
-        request[verb]({
+        let resourceUrl = pitUrl + '/' + resource
+        let creq = request[verb]({
             url: resourceUrl,
             agentOptions: agentOptions,
-            headers: { 'X-Auth-Token': token },
-            json: true,
-            body: content
-        }, function(error, response, body) {
-            if(error) {
-                console.error('Unable to reach pit: ' + error.code)
-                process.exit(1)
-            } else if (response.statusCode === 401) {
+            headers: {
+                'X-Auth-Token': token,
+                'content-type': 'application/json'
+            },
+            body: content ? JSON.stringify(content) : undefined
+        })
+        .on('error', err => fail('Unable to reach pit: ' + err.code))
+        .on('response', res => {
+            if (res.statusCode === 401) {
                 var password = readlineSync.question('Please enter password: ', { hideEchoBack: true })
-                authenticate(username, password, function() {
-                    sendRequest(verb, resource, content, callback, params)
+                authenticate(username, password, () => sendRequest(verb, resource, content, callback, asStream))
+            } else if (asStream) {
+                callback(res.statusCode, creq)
+            } else {
+                chunks = []
+                creq.on('data', chunk => chunks.push(chunk))
+                creq.on('end', () => {
+                    let body = Buffer.concat(chunks)
+                    let contentType = res.headers['content-type']
+                    if (contentType && contentType.startsWith('application/json')) {
+                        try {
+                            body = JSON.parse(body.toString())
+                        } catch (ex) {
+                            fail('Problem parsing pit response.')
+                        }
+                    }
+                    callback(res.statusCode, body)
                 })
-            } else if (callback instanceof Function) {
-                callback(response.statusCode, body)
             }
         })
     }
@@ -127,7 +146,7 @@ function callPit(verb, resource, content, callback, params) {
     }
 
     function sendCommand() {
-        sendRequest(verb, resource, content, callback, params)
+        sendRequest(verb, resource, content, callback, asStream)
     }
 
     if(!fs.existsSync(userFile)) {
@@ -179,16 +198,6 @@ const jobStates = {
     DONE: 5,
     FAILED: 6
 }
-
-//const jobStateNames = [
-//    colors.yellow('PRE'),
-//    'WAI',
-//    colors.yellow('STA'),
-//    colors.green('RUN'),
-//    colors.grey('STO'),
-//    'FIN',
-//    colors.red('ERR')
-//]
 
 const jobStateNames = [
     'PRE',
@@ -293,11 +302,6 @@ function parseEntityProperties(entity, properties) {
         })
     }
     return obj
-}
-
-function fail(message) {
-    console.error('Command failed: ' + message)
-    process.exit(1)
 }
 
 function evaluateResponse(code, body) {
@@ -499,7 +503,7 @@ program
     .command('put [clusterRequest]')
     .alias('run')
     .description('enqueues current directory as new job')
-    .option('-m, --message', 'short description of the job')
+    .option('-m, --message <message>', 'short description of the job')
     .option('-w, --watch', 'immediately starts watching the job')
     .on('--help', function() {
         printIntro()
@@ -542,14 +546,19 @@ program
     })
 
 program
-    .command('watch [jobNumber]')
+    .command('log [jobNumber] [processNumber]')
     .description('continuously watches job\'s log output')
     .on('--help', function() {
         printIntro()
-        printExample('pit watch 1234')
+        printExample('pit log 1234')
     })
-    .action(function(jobNumber) {
-        callPit('get', 'jobs/' + jobNumber + '/watch', evaluateResponse)
+    .action(function(jobNumber, processNumber) {
+        let logPath = 'jobs/' + jobNumber + '/processes/' + processNumber + '/log'
+        callPit('get', logPath, (code, res) => {
+            res.on('data', chunk => {
+                process.stdout.write(chunk)
+            })
+        }, true)
     })
 
 program
@@ -574,7 +583,7 @@ program
                         jobStateNames[job.state],
                         job.user,
                         job.description,
-                        job.state >= jobStates.STARTING && job.state <= jobStates.STOPPING ? job.clusterReservation : job.clusterRequest,
+                        job.clusterReservation || job.clusterRequest,
                     ])
                     //job.schedulePosition
                 }
