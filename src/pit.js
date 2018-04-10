@@ -58,9 +58,9 @@ function callPit(verb, resource, content, callback, asStream) {
     if(!fs.existsSync(connectFile)) {
         connectFile = path.join(os.homedir(), connectFile)
         if(!fs.existsSync(connectFile)) {
-            console.error('Unable to find connectivity info about your pvar it.')
+            console.error('Unable to find connectivity info about your pit.')
             console.error('If you know your pit\'s URL, use "pit connect <URL>" to configure the connection.')
-            console.error('If your pit admin provided a "' + CONNNECT_FILE + '" file, place it either in your home directory (as default pit) or the (overruling) project root.')
+            console.error('If your pit admin provided a "' + CONNECT_FILE + '" file, place it either in your home directory (as default pit) or the (overruling) project root.')
             process.exit(1)
         }
     }
@@ -168,7 +168,7 @@ function callPit(verb, resource, content, callback, asStream) {
                         user = promptUserInfo()
                         sendRequest('put', userPath, user, function(code, body) {
                             if (code == 200) {
-                                authenticate(username, password, sendCommand)
+                                authenticate(username, user.password, sendCommand)
                             } else {
                                 console.error('Unable to register user.')
                                 exit(1)
