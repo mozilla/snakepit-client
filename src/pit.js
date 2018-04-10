@@ -323,6 +323,15 @@ function runCommand() {
     }
 }
 
+function showLog(jobNumber, processNumber) {
+    let logPath = 'jobs/' + jobNumber + '/processes/' + processNumber + '/log'
+    callPit('get', logPath, (code, res) => {
+        res.on('data', chunk => {
+            process.stdout.write(chunk)
+        })
+    }, true)
+}
+
 program
     .version('0.0.1')
 
@@ -500,14 +509,13 @@ program
     })
 
     program
-    .command('put [clusterRequest]')
-    .alias('run')
+    .command('run <title> [clusterRequest]')
+    .alias('put')
     .description('enqueues current directory as new job')
-    .option('-m, --message <message>', 'short description of the job')
     .option('-w, --watch', 'immediately starts watching the job')
     .on('--help', function() {
         printIntro()
-        printExample('pit put 2:(8:gtx1070)')
+        printExample('pit put 2:[8:gtx1070]')
         printLine()
         printLine('"clusterRequest" is an expression to specify resources this job requires from the cluster.')
         printLine('It\'s a comma separated list of "process requests".')
@@ -515,7 +523,7 @@ program
         printLine('The example above will allocate 2 process instances. For each process, 8 "gtx1070" resources will get allocated.')
         printLine('You can also provide a "' + REQUEST_FILE + '" file with the same content in your project root as default value.')
     })
-    .action(function(clusterRequest, options) {
+    .action(function(title, clusterRequest, options) {
         var tracking = runCommand('git', 'rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}')
         var ob = tracking.split('/')
         if (ob.length != 2) {
@@ -532,17 +540,27 @@ program
         if (!clusterRequest) {
             fail('No resources requested from cluster. Please provide them either through command line or through a "' + REQUEST_FILE + '" file in your project root.')
         }
-        console.log('Remote: ' + origin + ' <' + originUrl + '>')
-        console.log('Hash: ' + hash)
-        console.log('Diff LOC: ' + diff.split('\n').length)
-        console.log('Requested cluster resources: "' + clusterRequest + '"')
+        if (title.length > 20) {
+            fail('Job title too long (20 characters max)')
+        }
         callPit('post', 'jobs', {
             origin: originUrl,
             hash: hash,
             diff: diff,
             clusterRequest: clusterRequest,
-            description: options.message || null
-        }, evaluateResponse)
+            description: title
+        }, (code, body) => {
+            if (code == 200) {
+                console.log('Job number: ' + body.id)
+                console.log('Remote:     ' + origin + ' <' + originUrl + '>')
+                console.log('Hash:       ' + hash)
+                console.log('Diff LOC:   ' + diff.split('\n').length)
+                console.log('Resources:  "' + clusterRequest + '"')
+                if (options.watch) {
+                    showLog(body.id, 0)
+                }
+            }
+        })
     })
 
 program
@@ -552,14 +570,7 @@ program
         printIntro()
         printExample('pit log 1234')
     })
-    .action(function(jobNumber, processNumber) {
-        let logPath = 'jobs/' + jobNumber + '/processes/' + processNumber + '/log'
-        callPit('get', logPath, (code, res) => {
-            res.on('data', chunk => {
-                process.stdout.write(chunk)
-            })
-        }, true)
-    })
+    .action(showLog)
 
 program
     .command('status')
