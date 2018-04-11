@@ -6,8 +6,6 @@ const program = require('commander')
 const request = require('request')
 const readlineSync = require('readline-sync')
 const { execSync, execFileSync } = require('child_process')
-const Table = require('cli-table2')
-const blessed = require('blessed')
 
 const USER_FILE = '.pituser.txt'
 const CONNECT_FILE = '.pitconnect.txt'
@@ -224,10 +222,21 @@ const entityDescriptors = {
     },
     'node': {
         'id': 'Node name',
-        'addresss': 'Address',
+        'address': 'Address',
         'port': 'Port',
-        'user': 'Remote user',
-        'gpus': 'GPUs'
+        'user': 'Remote user'
+    },
+    'job': {
+        'id': 'Job number',
+        'user': 'Owner',
+        'description': 'Title',
+        'state': (o, v) => ['State', jobStateNames[v] + (v == jobStates.WAITING ? ' (position ' + o.schedulePosition + ')' : '')],
+        'origin': 'Repository',
+        'hash': 'Hash',
+        'diff': (o, v) => v && ['Diff', v.split('\n').length + ' LoC'],
+        'clusterRequest': 'Request',
+        'clusterReservation': 'Reservation',
+        'numProcesses': 'Processes'
     },
     'alias': {
         'name': 'Resource\'s name'
@@ -331,6 +340,8 @@ function showLog(jobNumber, processNumber) {
         })
     }, true)
 }
+
+
 
 program
     .version('0.0.1')
@@ -481,11 +492,26 @@ program
             if(descriptor) {
                 callPit('get', entity.plural + '/' + entity.id, function(code, body) {
                     if (code == 200) {
-                        for (var property in body) {
-                            if (body.hasOwnProperty(property)) {
-                                var name = descriptor[property] || property
-                                console.log(name + ': ' + body[property])
+                        let attributes = []
+                        let maxLen = 0
+                        for (let property of Object.keys(descriptor)) {
+                            let name = descriptor[property]
+                            let attribute
+                            if (name instanceof Function) {
+                                attribute = name(body, body[property])
+                            } else if (body.hasOwnProperty(property)) {
+                                attribute = [name, body[property]]
                             }
+                            if (attribute) {
+                                if (attribute[0].length > maxLen) {
+                                    maxLen = attribute[0].length
+                                }
+                                attributes.push(attribute)
+                            }
+                        }
+                        for (let attribute of attributes) {
+                            let name = attribute[0] + ':' + Array(maxLen - attribute[0].length + 1).join(' ')
+                            console.log(name + ' ' + attribute[1])
                         }
                     } else {
                         evaluateResponse(code, body)
@@ -574,35 +600,55 @@ program
 
 program
     .command('status')
-    .alias('jobs')
     .description('prints a job status report')
+    .option('-w, --watch', 'continuous watching')
     .on('--help', function() {
         printIntro()
         printExample('pit status')
     })
-    .action(function() {
-        callPit('get', 'jobs', function(code, jobs) {
-            if (code == 200) {
-                let table = new Table({
-                    head: ['Job', 'Status', 'User', 'Description', 'Resources'],
-                    style: { head: [], border: [] },
-                    colWidths: [6, 8, 12, 40]
-                })
-                for(let job of jobs) {
-                    table.push([
-                        job.id,
-                        jobStateNames[job.state],
-                        job.user,
-                        job.description,
-                        job.clusterReservation || job.clusterRequest,
-                    ])
-                    //job.schedulePosition
-                }
-                console.log(table.toString())
-            } else {
-                evaluateResponse(code, body)
+    .action(function(options) {
+        let updateStatus = () => {
+            if (options.watch) {
+                enterSecondary()
             }
-        })
+            callPit('get', 'status', function(code, jobGroups) {
+                if (code == 200) {
+                    if (options.watch) {
+                        process.stdout.write('\033[2J')
+                        process.stdout.write('\033[0;0H')
+                    }
+                    writeFragment('JOB', 4, true, ' ')
+                    writeFragment('S', 3, true, ' ')
+                    writeFragment('USER', 10, false, ' ')
+                    writeFragment('TITLE', 20, false, ' ')
+                    writeFragment('RESOURCE', 30, false, '\n')
+
+                    let printJobs = (jobs, caption) => {
+                        if (jobs.length > 0) {
+                            if (caption) {
+                                console.log(caption + ':')
+                            }
+                            for(let job of jobs) {
+                                writeFragment(job.id, 4, true, ' ')
+                                writeFragment(jobStateNames[job.state], 3, true, ' ')
+                                writeFragment(job.user, 10, false, ' ')
+                                writeFragment(job.description, 20, false, ' ')
+                                writeFragment(job.clusterReservation || job.clusterRequest, 30, false, '\n')
+                            }
+                        }
+                    }
+                    printJobs(jobGroups.running, 'Running')
+                    printJobs(jobGroups.waiting, 'Waiting')
+                    printJobs(jobGroups.done, 'Done')
+                } else {
+                    evaluateResponse(code, jobGroups)
+                }
+                if (options.watch) {
+                    setTimeout(updateStatus, 1000)
+                }
+            })
+        }
+        updateStatus()
     })
 
 program.parse(process.argv)
@@ -610,4 +656,32 @@ program.parse(process.argv)
 if (!process.argv.slice(2).length) {
     program.outputHelp();
 }
+
+function writeFragment(text, len, right, padding) {
+    text = text + ''
+    text = text.substr(0, len)
+    padding = typeof padding == 'string' ? padding : ''
+    let space = Array(len - text.length + 1).join(' ')
+    text = right ? (space + text) : (text + space)
+    process.stdout.write(text + padding)
+}
+
+var inSecondary = false
+
+function enterSecondary() {
+    process.stdout.write('\033[?47h')
+    inSecondary = true
+}
+
+function exitSecondary() {
+    if (inSecondary) {
+        process.stdout.write('\033[?47l')
+        inSecondary = false
+    }
+}
+
+process.on('SIGINT', () => {
+    exitSecondary()
+    process.exit(0)
+})
 

@@ -31,8 +31,6 @@
   },
   "homepage": "https://github.com/mozilla/snakepit-client#readme",
   "dependencies": {
-    "blessed": "^0.1.81",
-    "cli-table2": "^0.2.0",
     "commander": "^2.14.1",
     "readline-sync": "^1.4.9"
   }
