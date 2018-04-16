@@ -188,16 +188,18 @@ function callPit(verb, resource, content, callback, asStream) {
 }
 
 const jobStates = {
-    PREPARING: 0,
-    WAITING: 1,
-    STARTING: 2,
-    RUNNING: 3,
-    STOPPING: 4,
-    DONE: 5,
-    FAILED: 6
+    NEW: 0,
+    PREPARING: 1,
+    WAITING: 2,
+    STARTING: 3,
+    RUNNING: 4,
+    STOPPING: 5,
+    DONE: 6,
+    FAILED: 7
 }
 
 const jobStateNames = [
+    'NEW',
     'PRE',
     'WAI',
     'STA',
@@ -236,11 +238,56 @@ const entityDescriptors = {
         'diff': (o, v) => v && ['Diff', v.split('\n').length + ' LoC'],
         'clusterRequest': 'Request',
         'clusterReservation': 'Reservation',
-        'numProcesses': 'Processes'
+        'numProcesses': 'Processes',
+        'stateChanges': (o, v) => v && [
+            'State changes',
+            '\n' + Object.keys(v).map(state => '  ' + jobStateNames[state] + ': ' + v[state]).join('\n')
+        ]
     },
     'alias': {
         'name': 'Resource\'s name'
     }
+}
+
+const httpCodes = {
+    400: 'Bad Request',
+    401: 'Unauthorized',
+    402: 'Payment Required',
+    403: 'Forbidden',
+    404: 'Not Found',
+    405: 'Method Not Allowed',
+    406: 'Not Acceptable',
+    407: 'Proxy Authentication Required',
+    408: 'Request Time-out',
+    409: 'Conflict',
+    410: 'Gone',
+    411: 'Length Required',
+    412: 'Precondition Failed',
+    413: 'Request Entity Too Large',
+    414: 'Request-URI Too Large',
+    415: 'Unsupported Media Type',
+    416: 'Requested Range Not Satisfiable',
+    417: 'Expectation Failed',
+    418: 'I\'m a teapot',
+    422: 'Unprocessable Entity',
+    423: 'Locked',
+    424: 'Failed Dependency',
+    425: 'Unordered Collection',
+    426: 'Upgrade Required',
+    428: 'Precondition Required',
+    429: 'Too Many Requests',
+    431: 'Request Header Fields Too Large',
+    500: 'Internal Server Error',
+    501: 'Not Implemented',
+    502: 'Bad Gateway',
+    503: 'Service Unavailable',
+    504: 'Gateway Time-out',
+    505: 'HTTP Version Not Supported',
+    506: 'Variant Also Negotiates',
+    507: 'Insufficient Storage',
+    509: 'Bandwidth Limit Exceeded',
+    510: 'Not Extended',
+    511: 'Network Authentication Required'
 }
 
 function printLine(msg) {
@@ -313,11 +360,14 @@ function parseEntityProperties(entity, properties) {
     return obj
 }
 
+function formatDuration(d) {
+    let two = n => ('0' + n).slice(-2)
+    return d.days > 99 ? d.days + 'd' : two(d.days) + 'd ' + two(d.hours) + ':' + two(d.minutes) + ':' + two(d.seconds)
+}
+
 function evaluateResponse(code, body) {
-    if (code == 409) {
-        fail('Not allowed')
-    } else if (code > 299) {
-        fail(code)
+    if (code > 299) {
+        fail((body && body.message) || httpCodes[code] || code)
     }
 }
 
@@ -335,13 +385,12 @@ function runCommand() {
 function showLog(jobNumber, processNumber) {
     let logPath = 'jobs/' + jobNumber + '/processes/' + processNumber + '/log'
     callPit('get', logPath, (code, res) => {
+        evaluateResponse(code)
         res.on('data', chunk => {
             process.stdout.write(chunk)
         })
     }, true)
 }
-
-
 
 program
     .version('0.0.1')
@@ -585,6 +634,8 @@ program
                 if (options.watch) {
                     showLog(body.id, 0)
                 }
+            } else {
+                evaluateResponse(code, body)
             }
         })
     })
@@ -619,6 +670,7 @@ program
                     }
                     writeFragment('JOB', 4, true, ' ')
                     writeFragment('S', 3, true, ' ')
+                    writeFragment('SINCE', 12, false, ' ')
                     writeFragment('USER', 10, false, ' ')
                     writeFragment('TITLE', 20, false, ' ')
                     writeFragment('RESOURCE', 30, false, '\n')
@@ -631,6 +683,7 @@ program
                             for(let job of jobs) {
                                 writeFragment(job.id, 4, true, ' ')
                                 writeFragment(jobStateNames[job.state], 3, true, ' ')
+                                writeFragment(formatDuration(job.since), 12, false, ' ')
                                 writeFragment(job.user, 10, false, ' ')
                                 writeFragment(job.description, 20, false, ' ')
                                 writeFragment(job.clusterReservation || job.clusterRequest, 30, false, '\n')
