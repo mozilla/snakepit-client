@@ -1,6 +1,6 @@
 echo $$
-for i in {1..100}
+for i in {1..1000}
 do
-    sleep 1
+    sleep 0.1
     echo $i
 done
