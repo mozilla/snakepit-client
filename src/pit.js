@@ -382,10 +382,15 @@ function runCommand() {
     }
 }
 
-function showLog(jobNumber, processNumber) {
+function showLog(jobNumber, processNumber, watch) {
+    processNumber = processNumber || 0
     let logPath = 'jobs/' + jobNumber + '/processes/' + processNumber + '/log'
     callPit('get', logPath, (code, res) => {
         evaluateResponse(code)
+        if (watch) {
+            enterSecondary()
+            clearScreen()
+        }
         res.on('data', chunk => {
             process.stdout.write(chunk)
         })
@@ -632,7 +637,7 @@ program
                 console.log('Diff LOC:   ' + diff.split('\n').length)
                 console.log('Resources:  "' + clusterRequest + '"')
                 if (options.watch) {
-                    showLog(body.id, 0)
+                    showLog(body.id, 0, true)
                 }
             } else {
                 evaluateResponse(code, body)
@@ -641,13 +646,14 @@ program
     })
 
 program
-    .command('log [jobNumber] [processNumber]')
+    .command('log <jobNumber> [processNumber]')
     .description('continuously watches job\'s log output')
+    .option('-w, --watch', 'continuous watching')
     .on('--help', function() {
         printIntro()
-        printExample('pit log 1234')
+        printExample('pit log 1234 0')
     })
-    .action(showLog)
+    .action((jobNumber, processNumber, options) => showLog(jobNumber, processNumber, options.watch))
 
 program
     .command('status')
@@ -665,10 +671,9 @@ program
             callPit('get', 'status', function(code, jobGroups) {
                 if (code == 200) {
                     if (options.watch) {
-                        process.stdout.write('\033[2J')
-                        process.stdout.write('\033[0;0H')
+                        clearScreen()
                     }
-                    writeFragment('JOB', 4, true, ' ')
+                    writeFragment('JOB', 6, true, ' ')
                     writeFragment('S', 3, true, ' ')
                     writeFragment('SINCE', 12, false, ' ')
                     writeFragment('USER', 10, false, ' ')
@@ -681,7 +686,7 @@ program
                                 console.log(caption + ':')
                             }
                             for(let job of jobs) {
-                                writeFragment(job.id, 4, true, ' ')
+                                writeFragment(job.id, 6, true, ' ')
                                 writeFragment(jobStateNames[job.state], 3, true, ' ')
                                 writeFragment(formatDuration(job.since), 12, false, ' ')
                                 writeFragment(job.user, 10, false, ' ')
@@ -710,6 +715,10 @@ if (!process.argv.slice(2).length) {
     program.outputHelp();
 }
 
+function escape(seq) {
+    process.stdout.write('\033' + seq)
+}
+
 function writeFragment(text, len, right, padding) {
     text = text + ''
     text = text.substr(0, len)
@@ -722,19 +731,34 @@ function writeFragment(text, len, right, padding) {
 var inSecondary = false
 
 function enterSecondary() {
-    process.stdout.write('\033[?47h')
-    inSecondary = true
+    if (!inSecondary) {
+        inSecondary = true
+        escape('[s')
+        escape('[?47h')
+        escape('[?25l')
+    }
 }
 
 function exitSecondary() {
     if (inSecondary) {
-        process.stdout.write('\033[?47l')
+        escape('[?25h')
+        escape('[?47l')
+        escape('[u')
         inSecondary = false
     }
+}
+
+function clearScreen() {
+    escape('[2J')
+    escape('[0;0H')
 }
 
 process.on('SIGINT', () => {
     exitSecondary()
     process.exit(0)
+})
+
+process.on('exit', () => {
+    exitSecondary()
 })
 
