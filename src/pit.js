@@ -245,6 +245,7 @@ const entityDescriptors = {
         'user': 'Owner',
         'description': 'Title',
         'state': (o, v) => ['State', jobStateNames[v] + (v == jobStates.WAITING ? ' (position ' + o.schedulePosition + ')' : '')],
+        'error': (o, v) => v && ['Error', '"' + v + '"'],
         'origin': 'Repository',
         'hash': 'Hash',
         'diff': (o, v) => v && ['Diff', v.split('\n').length + ' LoC'],
