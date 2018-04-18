@@ -194,8 +194,9 @@ const jobStates = {
     STARTING: 3,
     RUNNING: 4,
     STOPPING: 5,
-    DONE: 6,
-    FAILED: 7
+    CLEANING: 6,
+    DONE: 7,
+    FAILED: 8
 }
 
 const jobStateNames = [
@@ -205,6 +206,7 @@ const jobStateNames = [
     'STA',
     'RUN',
     'STO',
+    'CLN',
     'FIN',
     'ERR'
 ]
@@ -220,13 +222,23 @@ const entityDescriptors = {
         'id': 'Username',
         'fullname': 'Full name',
         'email': 'E-Mail address',
+        'groups': (o, v) => v && ['Groups', v.join(' ')],
         'admin': 'Is administrator'
     },
     'node': {
         'id': 'Node name',
         'address': 'Address',
         'port': 'Port',
-        'user': 'Remote user'
+        'user': 'Remote user',
+        'resources': (o, v) => v && [
+            'Resources',
+            '\n' + v.map((r, i) =>
+                '  ' + i + ': "' + r.name + '"' +
+                (r.alias ? ' aka "' + r.alias + '"' : '') +
+                ' (' + r.type + ' ' + r.index + ')' +
+                (r.groups ? ' - Groups: ' + r.groups.join(' ') : '')
+            ).join('\n')
+        ]
     },
     'job': {
         'id': 'Job number',
@@ -324,21 +336,21 @@ function printExample(line) {https://github.com/jamestalmage/cli-table2/blob/mas
     printLine(indent + '$ ' + line)
 }
 
-function splitPair(value, separator, name1, name2) {
+function splitPair(value, separator, ...names) {
     var obj = {}
     var parts = value.split(separator)
-    if (parts.length == 2) {
-        obj[name1] = parts[0]
-        obj[name2] = parts[1]
-    } else {
-        obj[name1] = value
+    for (let index in parts) {
+        obj[names[index]] = parts[index]
     }
     return obj
 }
 
-function parseEntity(entity) {
-    pair = splitPair(entity, ':', 'type', 'id')
+function parseEntity(entity, indexAllowed) {
+    pair = splitPair(entity, ':', 'type', 'id', 'index')
     pair.plural = (pair.type == 'alias') ? 'aliases' : (pair.type + 's')
+    if (!indexAllowed && pair.hasOwnProperty('index')) {
+        fail('Indices not allowed for ' + pair.type + ' entities')
+    }
     return pair
 }
 
@@ -517,6 +529,7 @@ program
         printIntro()
         printExample('pit show me')
         printExample('pit show users')
+        printExample('pit show groups')
         printExample('pit show nodes')
         printExample('pit show jobs')
         printExample('pit show aliases')
@@ -525,10 +538,10 @@ program
         printExample('pit show job:235')
         printExample('pit show alias:gtx1070')
         printLine()
-        printEntityHelp('me', 'users', 'nodes', 'jobs', 'aliases', entityUser, entityNode, entityJob, entityAlias)
+        printEntityHelp('me', 'users', 'groups', 'nodes', 'jobs', 'aliases', entityUser, entityNode, entityJob, entityAlias)
     })
     .action(function(entity, options) {
-        if(entity === 'users' || entity === 'nodes' || entity === 'jobs' || entity === 'aliases') {
+        if(entity === 'users' || entity === 'groups' || entity === 'nodes' || entity === 'jobs' || entity === 'aliases') {
             callPit('get', entity, function(code, body) {
                 if (code == 200) {
                     body.forEach(obj => console.log(obj))
@@ -538,7 +551,7 @@ program
             })
         } else {
             if (entity == 'me') {
-                entity = { type: 'user', id: '~' }
+                entity = { type: 'user', plural: 'users', id: '~' }
             } else {
                 entity = parseEntity(entity)
             }
@@ -578,6 +591,50 @@ program
     })
 
 program
+    .command('add-group <entity> <group>')
+    .description('adds the entity to the access group')
+    .on('--help', function() {
+        printIntro()
+        printExample('pit add-group node:machine1 professors')
+        printExample('pit add-group node:machine1:0 students')
+        printExample('pit add-group user:paul students')
+        printLine()
+        printEntityHelp(entityUser, entityNode, 'node:<node name>:<resource index>')
+    })
+    .action(function(entity, group) {
+        entity = parseEntity(entity, true)
+        if (entity.type == 'node' || entity.type == 'user') {
+            let resource = entity.hasOwnProperty('index') ? '/resources/' + entity.index : ''
+            let p = entity.plural + '/' + entity.id + resource + '/groups/' + group
+            callPit('put', p, evaluateResponse)
+        } else {
+            fail('Unsupported entity type "' + entity.type + '"')
+        }
+    })
+
+program
+    .command('remove-group <entity> <group>')
+    .description('removes the entity from the access group')
+    .on('--help', function() {
+        printIntro()
+        printExample('pit remove-group node:machine1 professors')
+        printExample('pit remove-group node:machine1:0 students')
+        printExample('pit remove-group user:paul students')
+        printLine()
+        printEntityHelp(entityUser, entityNode, 'node:<node name>:<resource index>')
+    })
+    .action(function(entity, group) {
+        entity = parseEntity(entity, true)
+        if (entity.type == 'node' || entity.type == 'user') {
+            let resource = entity.hasOwnProperty('index') ? '/resources/' + entity.index : ''
+            let p = entity.plural + '/' + entity.id + resource + '/groups/' + group
+            callPit('del', p, evaluateResponse)
+        } else {
+            fail('Unsupported entity type "' + entity.type + '"')
+        }
+    })
+
+program
     .command('stop <jobNumber>')
     .description('stops a running job')
     .on('--help', function() {
@@ -588,11 +645,12 @@ program
         callPit('post', 'jobs/' + jobNumber + '/stop', evaluateResponse)
     })
 
-    program
+program
     .command('run <title> [clusterRequest]')
     .alias('put')
     .description('enqueues current directory as new job')
-    .option('-w, --watch', 'immediately starts watching the job')
+    .option('-w, --watch', 'immediately starts watching the job log output on secondary buffer')
+    .option('-l, --log', 'waits for and prints job\'s log output')
     .on('--help', function() {
         printIntro()
         printExample('pit put 2:[8:gtx1070]')
@@ -638,6 +696,8 @@ program
                 console.log('Resources:  "' + clusterRequest + '"')
                 if (options.watch) {
                     showLog(body.id, 0, true)
+                } else if (options.log) {
+                    showLog(body.id, 0, false)
                 }
             } else {
                 evaluateResponse(code, body)
