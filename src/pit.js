@@ -57,8 +57,15 @@ function callPit(verb, resource, content, callback, asStream) {
         connectFile = path.join(os.homedir(), connectFile)
         if(!fs.existsSync(connectFile)) {
             console.error('Unable to find connectivity info about your pit.')
-            console.error('If you know your pit\'s URL, use "pit connect <URL>" to configure the connection.')
-            console.error('If your pit admin provided a "' + CONNECT_FILE + '" file, place it either in your home directory (as default pit) or the (overruling) project root.')
+            console.error(
+                'If you know your pit\'s URL, ' +
+                'use "pit connect <URL>" to configure the connection.'
+            )
+            console.error(
+                'If your pit admin provided a "' + CONNECT_FILE +
+                '" file, place it either in your home directory' +
+                '(as default pit) or the (overruling) project root.'
+            )
             process.exit(1)
         }
     }
@@ -94,7 +101,11 @@ function callPit(verb, resource, content, callback, asStream) {
         .on('response', res => {
             if (res.statusCode === 401) {
                 var password = readlineSync.question('Please enter password: ', { hideEchoBack: true })
-                authenticate(username, password, () => sendRequest(verb, resource, content, callback, asStream))
+                authenticate(
+                    username,
+                    password,
+                    () => sendRequest(verb, resource, content, callback, asStream)
+                )
             } else if (asStream) {
                 callback(res.statusCode, creq)
             } else {
@@ -131,7 +142,11 @@ function callPit(verb, resource, content, callback, asStream) {
                     }
                 })
             } else {
-                console.error('Unable to authenticate. If user "' + username + '" is not valid anymore, remove "' + USER_FILE + '" from this directory or your home folder and start over.')
+                console.error(
+                    'Unable to authenticate. If user "' + username +
+                    '" is not valid anymore, remove "' + USER_FILE +
+                    '" from this directory or your home folder and start over.'
+                )
                 process.exit(1)
             }
         })
@@ -157,11 +172,17 @@ function callPit(verb, resource, content, callback, asStream) {
             sendRequest('get', userPath + '/exists', function(code, body) {
                 if (code == 200) {
                     console.log('The user already exists.')
-                    var password = readlineSync.question('Please enter password (or Ctrl-C to abort): ', { hideEchoBack: true })
+                    var password = readlineSync.question(
+                        'Please enter password (or Ctrl-C to abort): ',
+                        { hideEchoBack: true }
+                    )
                     authenticate(username, password, sendCommand)
                 } else {
                     console.log('Found no user of that name.')
-                    var register = readlineSync.question('Do you want to register this usename (yes|no)? ', { trueValue: ['yes', 'y'], falseValue: ['no', 'n'] })
+                    var register = readlineSync.question(
+                        'Do you want to register this usename (yes|no)? ',
+                        { trueValue: ['yes', 'y'], falseValue: ['no', 'n'] }
+                    )
                     if (register) {
                         user = promptUserInfo()
                         sendRequest('put', userPath, user, function(code, body) {
@@ -246,9 +267,7 @@ const entityDescriptors = {
         'description': 'Title',
         'state': (o, v) => ['State', jobStateNames[v] + (v == jobStates.WAITING ? ' (position ' + o.schedulePosition + ')' : '')],
         'error': (o, v) => v && ['Error', '"' + v + '"'],
-        'origin': 'Repository',
-        'hash': 'Hash',
-        'diff': (o, v) => v && ['Diff', v.split('\n').length + ' LoC'],
+        'provisioning': 'Provisioning',
         'clusterRequest': 'Request',
         'clusterReservation': 'Reservation',
         'numProcesses': 'Processes',

@@ -1,8 +1,2 @@
-echo $$
-echo "CVD: $CUDA_VISIBLE_DEVICES"
-nvidia-smi
-for i in {1..10}
-do
-    sleep 1
-    echo $i
-done
+env
+sleep 10
