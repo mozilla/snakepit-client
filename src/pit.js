@@ -270,7 +270,6 @@ const entityDescriptors = {
         'provisioning': 'Provisioning',
         'clusterRequest': 'Request',
         'clusterReservation': 'Reservation',
-        'numProcesses': 'Processes',
         'stateChanges': (o, v) => v && [
             'State changes',
             '\n' + Object.keys(v).map(state => '  ' + jobStateNames[state] + ': ' + v[state]).join('\n')
@@ -414,9 +413,10 @@ function runCommand() {
     }
 }
 
-function showLog(jobNumber, processNumber, watch) {
-    processNumber = processNumber || 0
-    let logPath = 'jobs/' + jobNumber + '/processes/' + processNumber + '/log'
+function showLog(jobNumber, groupIndex, processIndex, watch) {
+    groupIndex = groupIndex || 0
+    processIndex = processIndex || 0
+    let logPath = 'jobs/' + jobNumber + '/groups/' + groupIndex + '/processes/' + processIndex + '/log'
     callPit('get', logPath, (code, res) => {
         evaluateResponse(code)
         if (watch) {
@@ -712,12 +712,13 @@ program
                 console.log('Job number: ' + body.id)
                 console.log('Remote:     ' + origin + ' <' + originUrl + '>')
                 console.log('Hash:       ' + hash)
-                console.log('Diff LOC:   ' + diff.split('\n').length)
+                console.log('Diff LoC:   ' + diff.split('\n').length)
                 console.log('Resources:  "' + clusterRequest + '"')
                 if (options.watch) {
-                    showLog(body.id, 0, true)
+                    showLog(body.id, 0, 0, true)
                 } else if (options.log) {
-                    showLog(body.id, 0, false)
+                    console.log()
+                    showLog(body.id, 0, 0, false)
                 }
             } else {
                 evaluateResponse(code, body)
@@ -726,14 +727,15 @@ program
     })
 
 program
-    .command('log <jobNumber> [processNumber]')
+    .command('log <jobNumber> [groupIndex] [processIndex]')
     .description('continuously watches job\'s log output')
     .option('-w, --watch', 'continuous watching')
     .on('--help', function() {
         printIntro()
-        printExample('pit log 1234 0')
+        printExample('pit log 1234')
+        printExample('pit log 1234 0 1')
     })
-    .action((jobNumber, processNumber, options) => showLog(jobNumber, processNumber, options.watch))
+    .action((jobNumber, groupIndex, processIndex, options) => showLog(jobNumber, groupIndex, processIndex, options.watch))
 
 program
     .command('status')
@@ -753,12 +755,19 @@ program
                     if (options.watch) {
                         clearScreen()
                     }
+                    let fixed = 6 + 3 + 12 + 10 + 20 + 5
+                    let rest = process.stdout.columns
+                    if (rest && rest >= fixed) {
+                        rest = rest - fixed
+                    } else {
+                        rest = 30
+                    }
                     writeFragment('JOB', 6, true, ' ')
                     writeFragment('S', 3, true, ' ')
                     writeFragment('SINCE', 12, false, ' ')
                     writeFragment('USER', 10, false, ' ')
                     writeFragment('TITLE', 20, false, ' ')
-                    writeFragment('RESOURCE', 30, false, '\n')
+                    writeFragment('RESOURCE', rest, false, '\n')
 
                     let printJobs = (jobs, caption) => {
                         if (jobs.length > 0) {
@@ -771,7 +780,7 @@ program
                                 writeFragment(formatDuration(job.since), 12, false, ' ')
                                 writeFragment(job.user, 10, false, ' ')
                                 writeFragment(job.description, 20, false, ' ')
-                                writeFragment(job.clusterReservation || job.clusterRequest, 30, false, '\n')
+                                writeFragment(job.clusterReservation || job.clusterRequest, rest, false, '\n')
                             }
                         }
                     }

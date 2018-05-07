@@ -1,2 +1,2 @@
 env
-sleep 10
+ls ../groups/students
