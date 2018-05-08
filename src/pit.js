@@ -755,7 +755,7 @@ program
                     if (options.watch) {
                         clearScreen()
                     }
-                    let fixed = 6 + 3 + 12 + 10 + 20 + 5
+                    let fixed = 6 + 3 + 12 + 3 + 3 + 10 + 20 + 7
                     let rest = process.stdout.columns
                     if (rest && rest >= fixed) {
                         rest = rest - fixed
@@ -765,6 +765,8 @@ program
                     writeFragment('JOB', 6, true, ' ')
                     writeFragment('S', 3, true, ' ')
                     writeFragment('SINCE', 12, false, ' ')
+                    writeFragment('UC%', 3, true, ' ')
+                    writeFragment('UM%', 3, true, ' ')
                     writeFragment('USER', 10, false, ' ')
                     writeFragment('TITLE', 20, false, ' ')
                     writeFragment('RESOURCE', rest, false, '\n')
@@ -778,6 +780,8 @@ program
                                 writeFragment(job.id, 6, true, ' ')
                                 writeFragment(jobStateNames[job.state], 3, true, ' ')
                                 writeFragment(formatDuration(job.since), 12, false, ' ')
+                                writeFragment(Math.round(job.utilComp), 3, true, ' ')
+                                writeFragment(Math.round(job.utilMem), 3, true, ' ')
                                 writeFragment(job.user, 10, false, ' ')
                                 writeFragment(job.description, 20, false, ' ')
                                 writeFragment(job.clusterReservation || job.clusterRequest, rest, false, '\n')
