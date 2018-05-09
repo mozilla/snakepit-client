@@ -678,6 +678,7 @@ program
     .alias('put')
     .description('enqueues current directory as new job')
     .option('-p, --private', 'prevents automatic sharing of this job')
+    .option('-c, --continue <jobNumber>', 'continues job with provided number by copying its "keep" directory over to the new job')
     .option('-w, --watch', 'immediately starts watching the job log output on secondary buffer')
     .option('-l, --log', 'waits for and prints job\'s log output')
     .on('--help', function() {
@@ -716,7 +717,8 @@ program
             diff: diff,
             clusterRequest: clusterRequest,
             description: title,
-            private: options.private
+            private: options.private,
+            continueJob: options.continue
         }, (code, body) => {
             if (code == 200) {
                 console.log('Job number: ' + body.id)
