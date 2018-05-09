@@ -244,6 +244,7 @@ const entityDescriptors = {
         'fullname': 'Full name',
         'email': 'E-Mail address',
         'groups': (o, v) => v && ['Groups', v.join(' ')],
+        'autoshare': (o, v) => v && ['Auto share', v.join(' ')],
         'admin': 'Is administrator'
     },
     'node': {
@@ -263,13 +264,14 @@ const entityDescriptors = {
     },
     'job': {
         'id': 'Job number',
-        'user': 'Owner',
         'description': 'Title',
-        'state': (o, v) => ['State', jobStateNames[v] + (v == jobStates.WAITING ? ' (position ' + o.schedulePosition + ')' : '')],
+        'user': 'Owner',
+        'groups': (o, v) => v && ['Groups', v.join(' ')],
         'error': (o, v) => v && ['Error', '"' + v + '"'],
         'provisioning': 'Provisioning',
         'clusterRequest': 'Request',
         'clusterReservation': 'Reservation',
+        'state': (o, v) => ['State', jobStateNames[v] + (v == jobStates.WAITING ? ' (position ' + o.schedulePosition + ')' : '')],
         'stateChanges': (o, v) => v && [
             'State changes',
             '\n' + Object.keys(v).map(state => '  ' + jobStateNames[state] + ': ' + v[state]).join('\n')
@@ -384,6 +386,8 @@ function parseEntityProperties(entity, properties) {
             assignment = parseAssignment(assignment)
             if (assignment.property == 'cvd') {
                 assignment.value = assignment.value.split(',').map(v => Number(v))
+            } else if (assignment.property == 'autoshare') {
+                assignment.value = assignment.value.split(',')
             }
             obj[assignment.property] = assignment.value
         })
@@ -494,8 +498,9 @@ program
         printExample('pit set user:paul email=x@y.z fullname="Paul Smith"')
         printExample('pit set node:machine1 adremotedress=192.168.2.1')
         printExample('pit set alias:gtx1070 name="GeForce GTX 1070"')
+        printExample('pit set job:123 autoshare=students,professors')
         printLine()
-        printEntityHelp(entityUser, entityNode, entityAlias)
+        printEntityHelp(entityUser, entityNode, entityJob, entityAlias)
         printPropertyHelp()
         printUserPropertyHelp()
         printNodePropertyHelp()
@@ -519,8 +524,9 @@ program
         printExample('pit get user:paul email')
         printExample('pit get node:machine1 address')
         printExample('pit get alias:gtx1070 name')
+        printExample('pit get job:123 autoshare')
         printLine()
-        printEntityHelp(entityUser, entityNode, entityAlias)
+        printEntityHelp(entityUser, entityNode, entityJob, entityAlias)
         printPropertyHelp()
         printUserPropertyHelp()
         printNodePropertyHelp()
@@ -618,12 +624,13 @@ program
         printExample('pit add-group node:machine1 professors')
         printExample('pit add-group node:machine1:0 students')
         printExample('pit add-group user:paul students')
+        printExample('pit add-group job:123 students')
         printLine()
-        printEntityHelp(entityUser, entityNode, 'node:<node name>:<resource index>')
+        printEntityHelp(entityUser, entityNode, entityJob, 'node:<node name>:<resource index>')
     })
     .action(function(entity, group) {
         entity = parseEntity(entity, true)
-        if (entity.type == 'node' || entity.type == 'user') {
+        if (entity.type == 'node' || entity.type == 'user' || entity.type == 'job') {
             let resource = entity.hasOwnProperty('index') ? '/resources/' + entity.index : ''
             let p = entity.plural + '/' + entity.id + resource + '/groups/' + group
             callPit('put', p, evaluateResponse)
@@ -640,12 +647,13 @@ program
         printExample('pit remove-group node:machine1 professors')
         printExample('pit remove-group node:machine1:0 students')
         printExample('pit remove-group user:paul students')
+        printExample('pit remove-group job:123 students')
         printLine()
-        printEntityHelp(entityUser, entityNode, 'node:<node name>:<resource index>')
+        printEntityHelp(entityUser, entityNode, entityJob, 'node:<node name>:<resource index>')
     })
     .action(function(entity, group) {
         entity = parseEntity(entity, true)
-        if (entity.type == 'node' || entity.type == 'user') {
+        if (entity.type == 'node' || entity.type == 'user' || entity.type == 'job') {
             let resource = entity.hasOwnProperty('index') ? '/resources/' + entity.index : ''
             let p = entity.plural + '/' + entity.id + resource + '/groups/' + group
             callPit('del', p, evaluateResponse)
@@ -669,6 +677,7 @@ program
     .command('run <title> [clusterRequest]')
     .alias('put')
     .description('enqueues current directory as new job')
+    .option('-p, --private', 'prevents automatic sharing of this job')
     .option('-w, --watch', 'immediately starts watching the job log output on secondary buffer')
     .option('-l, --log', 'waits for and prints job\'s log output')
     .on('--help', function() {
@@ -706,7 +715,8 @@ program
             hash: hash,
             diff: diff,
             clusterRequest: clusterRequest,
-            description: title
+            description: title,
+            private: options.private
         }, (code, body) => {
             if (code == 200) {
                 console.log('Job number: ' + body.id)
@@ -736,6 +746,24 @@ program
         printExample('pit log 1234 0 1')
     })
     .action((jobNumber, groupIndex, processIndex, options) => showLog(jobNumber, groupIndex, processIndex, options.watch))
+
+program
+    .command('download <jobNumber>')
+    .description('downloads job directory as .tar.gz archive')
+    .on('--help', function() {
+        printIntro()
+        printExample('pit download 1234')
+    })
+    .action((jobNumber) => {
+        let filename = 'job' + jobNumber + '.tar.gz'
+        if (fs.existsSync(filename)) {
+            fail('Unable to download: File "' + filename + '" already exists')
+        }
+        callPit('get', 'jobs/' + jobNumber + '/targz', (code, res) => {
+            evaluateResponse(code)
+            res.pipe(fs.createWriteStream(filename))
+        }, true)
+    })
 
 program
     .command('status')
