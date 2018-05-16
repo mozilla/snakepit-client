@@ -229,7 +229,7 @@ const jobStateNames = [
     'STO',
     'CLN',
     'FIN',
-    'ERR'
+    'ARC'
 ]
 
 const indent = '  '
