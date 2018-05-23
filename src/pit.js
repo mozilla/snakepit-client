@@ -11,6 +11,9 @@ const USER_FILE = '.pituser.txt'
 const CONNECT_FILE = '.pitconnect.txt'
 const REQUEST_FILE = '.pitrequest.txt'
 
+const githubGitPrefix = 'git@github.com:'
+const githubHttpsPrefix = 'https://github.com/'
+
 function fail(message) {
     console.error('Command failed: ' + message)
     process.exit(1)
@@ -706,6 +709,9 @@ program
         var branch = ob[1]
         var hash = runCommand('git', 'rev-parse', tracking)
         var originUrl = runCommand('git', 'remote', 'get-url', origin)
+        if (originUrl.startsWith(githubGitPrefix)) {
+            originUrl = githubHttpsPrefix + originUrl.substr(githubGitPrefix.length)
+        }
         var diff = runCommand('git', 'diff', '--no-prefix', tracking)
         if (!clusterRequest && fs.existsSync(REQUEST_FILE)) {
             clusterRequest = fs.readFileSync(REQUEST_FILE, 'utf-8').trim()
