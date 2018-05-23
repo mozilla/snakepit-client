@@ -417,16 +417,21 @@ function runCommand() {
     }
 }
 
-function showLog(jobNumber, groupIndex, processIndex, watch) {
+function showPreparationLog(jobNumber) {
+    callPit('get', 'jobs/' + jobNumber + '/preplog', (code, res) => {
+        evaluateResponse(code)
+        res.on('data', chunk => {
+            process.stdout.write(chunk)
+        })
+    }, true)
+}
+
+function showLog(jobNumber, groupIndex, processIndex) {
     groupIndex = groupIndex || 0
     processIndex = processIndex || 0
     let logPath = 'jobs/' + jobNumber + '/groups/' + groupIndex + '/processes/' + processIndex + '/log'
     callPit('get', logPath, (code, res) => {
         evaluateResponse(code)
-        if (watch) {
-            enterSecondary()
-            clearScreen()
-        }
         res.on('data', chunk => {
             process.stdout.write(chunk)
         })
@@ -727,10 +732,14 @@ program
                 console.log('Diff LoC:   ' + diff.split('\n').length)
                 console.log('Resources:  "' + clusterRequest + '"')
                 if (options.watch) {
-                    showLog(body.id, 0, 0, true)
+                    enterSecondary()
+                    clearScreen()
+                    showPreparationLog(body.id)
+                    showLog(body.id, 0, 0)
                 } else if (options.log) {
                     console.log()
-                    showLog(body.id, 0, 0, false)
+                    showPreparationLog(body.id)
+                    showLog(body.id, 0, 0)
                 }
             } else {
                 evaluateResponse(code, body)
@@ -747,7 +756,13 @@ program
         printExample('pit log 1234')
         printExample('pit log 1234 0 1')
     })
-    .action((jobNumber, groupIndex, processIndex, options) => showLog(jobNumber, groupIndex, processIndex, options.watch))
+    .action((jobNumber, groupIndex, processIndex, options) => {
+        if (options.watch) {
+            enterSecondary()
+            clearScreen()
+        }
+        showLog(jobNumber, groupIndex, processIndex)
+    })
 
 program
     .command('download <jobNumber>')
