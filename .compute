@@ -1,1 +1,1 @@
-cat ../keep/test.txt
+cat ~/.snakepit/cert.pem

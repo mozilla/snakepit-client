@@ -235,6 +235,11 @@ const jobStateNames = [
     'ARC'
 ]
 
+const nodeStateNames = [
+    'OFFLINE',
+    'ONLINE'
+]
+
 const indent = '  '
 const entityUser = 'user:<username>'
 const entityNode = 'node:<node name>'
@@ -253,6 +258,8 @@ const entityDescriptors = {
     'node': {
         'id': 'Node name',
         'address': 'Address',
+        'state': (o, v) => ['State', nodeStateNames[v]],
+        'since': 'Since',
         'port': 'Port',
         'user': 'Remote user',
         'resources': (o, v) => v && [
