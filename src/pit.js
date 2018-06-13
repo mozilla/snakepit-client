@@ -700,6 +700,7 @@ program
         printIntro()
         printExample('pit put 2:[8:gtx1070]')
         printLine()
+        printLine('"title" is a short text that will later help identifying the job and its purpose.')
         printLine('"clusterRequest" is an expression to specify resources this job requires from the cluster.')
         printLine('It\'s a comma separated list of "process requests".')
         printLine('Each "process request" specifies the number of process instances and (divided by colon and in braces) which resources to allocate for one process instances (on one node).')
@@ -766,15 +767,24 @@ program
     .option('-w, --watch', 'continuous watching')
     .on('--help', function() {
         printIntro()
+        printExample('pit log p')
         printExample('pit log 1234')
         printExample('pit log 1234 0 1')
+        printLine()
+        printLine('"jobNumber" is the number of the job who\'s log should be shown.')
+        printLine('"groupIndex" is the index number of a specific process group. if set to "p", the preparation log is shown and "processIndex" ignored.')
+        printLine('"processIndex" is the index number of a process within the specified process group.')
     })
     .action((jobNumber, groupIndex, processIndex, options) => {
         if (options.watch) {
             enterSecondary()
             clearScreen()
         }
-        showLog(jobNumber, groupIndex, processIndex)
+        if (groupIndex == 'p') {
+            showPreparationLog(jobNumber)
+        } else {
+            showLog(jobNumber, groupIndex, processIndex)
+        }
     })
 
 program
