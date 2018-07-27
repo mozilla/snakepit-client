@@ -6,6 +6,7 @@ const program = require('commander')
 const request = require('request')
 const readlineSync = require('readline-sync')
 const { execSync, execFileSync } = require('child_process')
+const terminfo = require('terminfo')()
 
 const USER_FILE = '.pituser.txt'
 const CONNECT_FILE = '.pitconnect.txt'
@@ -876,10 +877,6 @@ if (!process.argv.slice(2).length) {
     program.outputHelp();
 }
 
-function escape(seq) {
-    process.stdout.write('\033' + seq)
-}
-
 function writeFragment(text, len, right, padding) {
     text = text + ''
     text = text.substr(0, len)
@@ -892,26 +889,26 @@ function writeFragment(text, len, right, padding) {
 var inSecondary = false
 
 function enterSecondary() {
-    if (!inSecondary) {
-        inSecondary = true
-        escape('[s')
-        escape('[?47h')
-        escape('[?25l')
+    if (!global.inSecondary) {
+        process.stdout.write(terminfo.saveCursor)
+        process.stdout.write(terminfo.enterCaMode)
+        process.stdout.write(terminfo.cursorInvisible)
+        global.inSecondary = true
     }
 }
 
 function exitSecondary() {
-    if (inSecondary) {
-        escape('[?25h')
-        escape('[?47l')
-        escape('[u')
-        inSecondary = false
+    if (global.inSecondary) {
+        process.stdout.write(terminfo.cursorVisible)
+        process.stdout.write(terminfo.exitCaMode)
+        process.stdout.write(terminfo.restoreCursor)
+        global.inSecondary = false
     }
 }
 
 function clearScreen() {
-    escape('[2J')
-    escape('[0;0H')
+    process.stdout.write(terminfo.clearScreen)
+    process.stdout.write(terminfo.cursorHome)
 }
 
 process.on('SIGINT', () => {
