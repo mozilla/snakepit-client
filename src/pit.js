@@ -415,15 +415,29 @@ function evaluateResponse(code, body) {
     }
 }
 
-function runCommand() {
-    var args = Array.prototype.slice.call(arguments)
-    var file = args.shift()
+function _runCommand(args, exitOnError) {
+    let file = args.shift()
+    let options = { encoding: 'utf8' }
+    if (!exitOnError) {
+        options.stdio = ['pipe', 'pipe', 'ignore']
+    }
     try {
-        return execFileSync(file, args, { encoding: 'utf8' }).trim()
+        return execFileSync(file, args, options).trim()
     } catch (err) {
+        if (!exitOnError) {
+            return
+        }
         var message = err.message.includes('ENOENT') ? 'Not found' : err.message
         fail('Problem executing "' + file + '": ' + message)
     }
+}
+
+function tryCommand() {
+    return _runCommand(Array.prototype.slice.call(arguments), false)
+}
+
+function runCommand() {
+    return _runCommand(Array.prototype.slice.call(arguments), true)
 }
 
 function showPreparationLog(jobNumber) {
@@ -707,14 +721,17 @@ program
         printLine('You can also provide a "' + REQUEST_FILE + '" file with the same content in your project root as default value.')
     })
     .action(function(title, clusterRequest, options) {
-        var tracking = runCommand('git', 'rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}')
+        var tracking = tryCommand('git', 'rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}') || 'origin/master'
         var ob = tracking.split('/')
         if (ob.length != 2) {
             fail('Problem getting tracked git remote and branch')
         }
         var origin = ob[0]
         var branch = ob[1]
-        var hash = runCommand('git', 'rev-parse', tracking)
+        var hash = tryCommand('git', 'rev-parse', tracking)
+        if (!hash) {
+            fail('Problem getting remote branch "' + tracking + '"')
+        }
         var originUrl = runCommand('git', 'remote', 'get-url', origin)
         if (originUrl.startsWith(githubGitPrefix)) {
             originUrl = githubHttpsPrefix + originUrl.substr(githubGitPrefix.length)
