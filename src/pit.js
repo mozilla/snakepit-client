@@ -279,8 +279,7 @@ const entityDescriptors = {
         'groups': (o, v) => v && ['Groups', v.join(' ')],
         'error': (o, v) => v && ['Error', '"' + v + '"'],
         'provisioning': 'Provisioning',
-        'clusterRequest': 'Request',
-        'clusterReservation': 'Reservation',
+        'resources': 'Resources',
         'state': (o, v) => ['State', jobStateNames[v] + (v == jobStates.WAITING ? ' (position ' + o.schedulePosition + ')' : '')],
         'stateChanges': (o, v) => v && [
             'State changes',
@@ -852,7 +851,7 @@ program
                                 writeFragment(Math.round(job.utilMem), 3, true, ' ')
                                 writeFragment(job.user, 10, false, ' ')
                                 writeFragment(job.description, 20, false, ' ')
-                                writeFragment(job.clusterReservation || job.clusterRequest, rest, false, '\n')
+                                writeFragment(job.resources, rest, false, '\n')
                             }
                         }
                     }
