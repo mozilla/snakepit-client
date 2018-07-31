@@ -757,7 +757,7 @@ program
         }, (code, body) => {
             if (code == 200) {
                 console.log('Job number: ' + body.id)
-                console.log('Remote:     ' + origin + ' <' + originUrl + '>')
+                console.log('Remote:     ' + origin + ' <' + originUrl.replace(/\/\/.*\@/g, '//') + '>')
                 console.log('Hash:       ' + hash)
                 console.log('Diff LoC:   ' + diff.split('\n').length)
                 console.log('Resources:  "' + clusterRequest + '"')
