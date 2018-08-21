@@ -362,7 +362,7 @@ function printAliasPropertyHelp() {
     printLine('alias properties: "name".')
 }
 
-function printExample(line) {https://github.com/jamestalmage/cli-table2/blob/master/advanced-usage.md
+function printExample(line) {
     printLine(indent + '$ ' + line)
 }
 
