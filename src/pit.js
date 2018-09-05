@@ -732,7 +732,7 @@ program
         if (!hash) {
             fail('Problem getting remote branch "' + tracking + '"')
         }
-        var originUrl = runCommand('git', 'remote', 'get-url', origin)
+        var originUrl = runCommand('git', 'remote', 'get-url', '--push', origin)
         if (originUrl.startsWith(githubGitPrefix)) {
             originUrl = githubHttpsPrefix + originUrl.substr(githubGitPrefix.length)
         }
