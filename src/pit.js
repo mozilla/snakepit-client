@@ -49,9 +49,9 @@ function promptAliasInfo(alias) {
     return alias
 }
 
-function callPit(verb, resource, content, callback, asStream) {
+function callPit(verb, resource, content, callback, callOptions) {
     if (content instanceof Function) {
-        asStream = callback
+        callOptions = callback
         callback = content
         content = undefined
     }
@@ -84,20 +84,23 @@ function callPit(verb, resource, content, callback, asStream) {
     var username
     var token = ''
 
-    function sendRequest(verb, resource, content, callback, asStream) {
+    function sendRequest(verb, resource, content, callback, callOptions) {
         if (content instanceof Function) {
-            asStream = callback
+            callOptions = callback
             callback = content
             content = undefined
         }
-        let resourceUrl = pitUrl + '/' + resource
+        let headers = {
+            'X-Auth-Token': token,
+            'Content-Type': 'application/json'
+        }
+        if (callOptions && callOptions.offset) {
+            headers['Range'] = 'bytes=' + callOptions.offset + '-'
+        }
         let creq = request[verb]({
-            url: resourceUrl,
+            url: pitUrl + '/' + resource,
             agentOptions: agentOptions,
-            headers: {
-                'X-Auth-Token': token,
-                'content-type': 'application/json'
-            },
+            headers: headers,
             body: content ? JSON.stringify(content) : undefined
         })
         .on('error', err => fail('Unable to reach pit: ' + err.code))
@@ -107,9 +110,9 @@ function callPit(verb, resource, content, callback, asStream) {
                 authenticate(
                     username,
                     password,
-                    () => sendRequest(verb, resource, content, callback, asStream)
+                    () => sendRequest(verb, resource, content, callback, callOptions)
                 )
-            } else if (asStream) {
+            } else if (callOptions && callOptions.asStream) {
                 callback(res.statusCode, creq)
             } else {
                 chunks = []
@@ -162,7 +165,7 @@ function callPit(verb, resource, content, callback, asStream) {
     }
 
     function sendCommand() {
-        sendRequest(verb, resource, content, callback, asStream)
+        sendRequest(verb, resource, content, callback, callOptions)
     }
 
     if(!fs.existsSync(userFile)) {
@@ -446,7 +449,7 @@ function showPreparationLog(jobNumber) {
         res.on('data', chunk => {
             process.stdout.write(chunk)
         })
-    }, true)
+    }, { asStream: true })
 }
 
 function showLog(jobNumber, groupIndex, processIndex) {
@@ -458,7 +461,7 @@ function showLog(jobNumber, groupIndex, processIndex) {
         res.on('data', chunk => {
             process.stdout.write(chunk)
         })
-    }, true)
+    }, { asStream: true })
 }
 
 program
@@ -818,7 +821,90 @@ program
         callPit('get', 'jobs/' + jobNumber + '/targz', (code, res) => {
             evaluateResponse(code)
             res.pipe(fs.createWriteStream(filename))
-        }, true)
+        }, { asStream: true })
+    })
+
+program
+    .command('ls <jobNumber> [path]')
+    .description('lists contents within a job directory')
+    .on('--help', function() {
+        printIntro()
+        printExample('pit mount 1234 ./job1234')
+        printLine()
+        printLine('"jobNumber" is the number of the job who\'s job directory should be accessed.')
+        printLine('"path" is the path to list within the job directory.')
+    })
+    .action((jobNumber, path) => {
+        let job = 'jobs/' + jobNumber + '/'
+        let resource = path ? (path.startsWith('/') ? path.slice(1) : path) : ''
+        callPit('get', job + 'stats/' + resource, (code, stats) => {
+            evaluateResponse(code)
+            if (stats.isFile) {
+                console.log('F ' + resource)
+            } else {
+                callPit('get', job + 'content/' + resource, (code, contents) => {
+                    evaluateResponse(code)
+                    for(let dir of contents.dirs) {
+                        console.log('D ' + dir)
+                    }
+                    for(let file of contents.files) {
+                        console.log('F ' + file)
+                    }
+                })
+            }
+        })
+    })
+
+program
+    .command('cp <jobNumber> <jobPath> <fsPath>')
+    .description('copies contents within from job directory to local file system')
+    .on('--help', function() {
+        printIntro()
+        printExample('pit cp 1234 keep/checkpoint-0001.bin ./checkpoint.bin')
+        printLine()
+        printLine('"jobNumber" is the number of the job who\'s job directory should be accessed.')
+        printLine('"jobPath" is the source path within the job directory.')
+        printLine('"fsPath" is the destination path within local filesystem.')
+    })
+    .action((jobNumber, jobPath, fsPath) => {
+        let job = 'jobs/' + jobNumber + '/'
+        let resource = jobPath ? (jobPath.startsWith('/') ? jobPath.slice(1) : jobPath) : ''
+        callPit('get', job + 'stats/' + resource, (code, stats) => {
+            evaluateResponse(code)
+            if (stats.isFile) {
+                let offset = 0
+                if (fs.existsSync(fsPath)) {
+                    let localStats = fs.statSync(fsPath)
+                    if (localStats.isDirectory()) {
+                        let rname = jobPath.substring(jobPath.lastIndexOf('/') + 1)
+                        if (rname.length > 0) {
+                            fsPath = path.join(fsPath, rname)
+                        } else {
+                            fail('Cannot construct target filename.')
+                        }
+                    } else if (localStats.isFile()) {
+                        offset = localStats.size
+                    } else {
+                        fail('Cannot write to target.')
+                    }
+                } else {
+                    let dirname = path.dirname(fsPath)
+                    if (fs.existsSync(dirname)) {
+                        if (!fs.statSync(dirname).isDirectory()) {
+                            fail('Target directory not a directory.')
+                        }
+                    } else {
+                        fail('Target directory not existing.')
+                    }
+                }
+                callPit('get', job + 'content/' + resource, (code, res) => {
+                    evaluateResponse(code)
+                    res.pipe(fs.createWriteStream(fsPath))
+                }, { asStream: true }) // offset: offset
+            } else {
+                fail('At the moment only file copying is supported.')
+            }
+        })
     })
 
 program
