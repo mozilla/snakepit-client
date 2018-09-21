@@ -263,7 +263,9 @@ const entityDescriptors = {
         'address': 'Address',
         'state': (o, v) => ['State', nodeStateNames[v]],
         'since': 'Since',
-        'port': 'Port',
+        'port': 'SSH Port',
+        'minPort': 'Min-Port',
+        'maxPort': 'Max-Port',
         'user': 'Remote user',
         'resources': (o, v) => v && [
             'Resources',
@@ -358,7 +360,7 @@ function printUserPropertyHelp() {
 }
 
 function printNodePropertyHelp() {
-    printLine('Node properties: "address" (mandatory), "port", "cvd" (CUDA_VISIBLE_DEVICES), "user".')
+    printLine('Node properties: "address" (mandatory), "port", "minPort", "maxPort", "cvd" (CUDA_VISIBLE_DEVICES), "user".')
 }
 
 function printAliasPropertyHelp() {
