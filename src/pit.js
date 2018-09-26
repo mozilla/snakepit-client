@@ -2,6 +2,7 @@
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
+const httpfs = require('httpfs')
 const program = require('commander')
 const request = require('request')
 const readlineSync = require('readline-sync')
@@ -137,13 +138,13 @@ function callPit(verb, resource, content, callback, callOptions) {
         sendRequest('post', 'users/' + username + '/authenticate', { password: password }, function(code, body) {
             if (code == 200) {
                 token = body.token
-                fs.writeFile(userFile, username + '\n' + token, function(err) {
+                fs.writeFile(userFile, username + '\n' + token, { mode: parseInt('600', 8) }, function(err) {
                     if(err) {
                         console.error('Unable to store user info: ' + err)
                         process.exit(1)
                     } else {
                         if (callback instanceof Function) {
-                            callback()
+                            callback(token)
                         }
                     }
                 })
@@ -164,8 +165,12 @@ function callPit(verb, resource, content, callback, callOptions) {
         token = userContent[1]
     }
 
-    function sendCommand() {
-        sendRequest(verb, resource, content, callback, callOptions)
+    function sendCommand(token) {
+        if (verb == 'token') {
+            callback(token)
+        } else {
+            sendRequest(verb, resource, content, callback, callOptions)
+        }
     }
 
     if(!fs.existsSync(userFile)) {
@@ -214,6 +219,10 @@ function callPit(verb, resource, content, callback, callOptions) {
     }
 }
 
+function getToken(callback) {
+    callPit('token', null, null, callback)
+}
+
 const jobStates = {
     NEW: 0,
     PREPARING: 1,
@@ -245,8 +254,9 @@ const nodeStateNames = [
 
 const indent = '  '
 const entityUser = 'user:<username>'
+const entityGroup = 'group:<group name>'
 const entityNode = 'node:<node name>'
-const entityJob = 'node:<job number>'
+const entityJob = 'job:<job number>'
 const entityAlias = 'alias:<alias>'
 
 const entityDescriptors = {
@@ -907,6 +917,23 @@ program
                 fail('At the moment only file copying is supported.')
             }
         })
+    })
+
+program
+    .command('mount <entity> <directory>')
+    .description('mounts an entitie\'s directory to a local directory abd waits for Ctrl-C to unmount again')
+    .on('--help', function() {
+        printIntro()
+        printExample('pit mount home ~/pithome')
+        printExample('pit mount job:1234 ./job1234')
+        printExample('pit mount group:students ./students')
+        printExample('pit mount shared ./shared')
+        printLine()
+        printEntityHelp('home', entityUser, entityJob, entityGroup, 'shared')
+        printLine('Home and group directories are write-enabled.')
+    })
+    .action((entity, targetDir) => {
+
     })
 
 program
