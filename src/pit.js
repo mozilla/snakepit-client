@@ -15,6 +15,8 @@ const REQUEST_FILE = '.pitrequest.txt'
 const githubGitPrefix = 'git@github.com:'
 const githubHttpsPrefix = 'https://github.com/'
 
+var globalunmount
+
 function fail(message) {
     console.error('Command failed: ' + message)
     process.exit(1)
@@ -144,7 +146,7 @@ function callPit(verb, resource, content, callback, callOptions) {
                         process.exit(1)
                     } else {
                         if (callback instanceof Function) {
-                            callback(token)
+                            callback()
                         }
                     }
                 })
@@ -165,9 +167,13 @@ function callPit(verb, resource, content, callback, callOptions) {
         token = userContent[1]
     }
 
-    function sendCommand(token) {
-        if (verb == 'token') {
-            callback(token)
+    function sendCommand() {
+        if (verb == 'connection') {
+            callback({
+                url: pitUrl,
+                token: token,
+                ca: agentOptions && agentOptions.ca
+            })
         } else {
             sendRequest(verb, resource, content, callback, callOptions)
         }
@@ -219,8 +225,8 @@ function callPit(verb, resource, content, callback, callOptions) {
     }
 }
 
-function getToken(callback) {
-    callPit('token', null, null, callback)
+function getConnectionSettings(callback) {
+    callPit('connection', null, null, callback)
 }
 
 const jobStates = {
@@ -920,8 +926,8 @@ program
     })
 
 program
-    .command('mount <entity> <directory>')
-    .description('mounts an entitie\'s directory to a local directory abd waits for Ctrl-C to unmount again')
+    .command('mount <entity> <mountpoint>')
+    .description('mounts an entitie\'s directory to a local mountpoint (an empty directory) and waits for Ctrl-C to unmount again')
     .on('--help', function() {
         printIntro()
         printExample('pit mount home ~/pithome')
@@ -932,8 +938,25 @@ program
         printEntityHelp('home', entityUser, entityJob, entityGroup, 'shared')
         printLine('Home and group directories are write-enabled.')
     })
-    .action((entity, targetDir) => {
-
+    .action((entity, mountpoint) => {
+        let endpoint = '/shared'
+        getConnectionSettings(connection => {
+            httpfs.mount(
+                connection.url + endpoint,
+                mountpoint, 
+                { 
+                    headers: { 'X-Auth-Token': connection.token },
+                    certificate: connection.ca,
+                    cache: true,
+                    blocksize: 10 * 1024 * 1024
+                }, 
+                (err, mount) => {
+                    if (err) { throw err }
+                    console.log('press Ctrl-C to unmount')
+                    globalunmount = mount.unmount
+                }
+            )
+        })
     })
 
 program
@@ -1045,12 +1068,25 @@ function clearScreen() {
     escape('[0;0H')
 }
 
-process.on('SIGINT', () => {
+function unmount() {
+    if (globalunmount) {
+        console.log('\runmounting...')
+        globalunmount()
+        globalunmount = null
+    }
+}
+
+function cleanup() {
+    unmount()
     exitSecondary()
+}
+
+process.on('SIGINT', () => {
+    cleanup()
     process.exit(0)
 })
 
 process.on('exit', () => {
-    exitSecondary()
+    cleanup()
 })
 
