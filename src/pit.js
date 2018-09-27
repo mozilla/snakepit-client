@@ -1,12 +1,13 @@
 #! /usr/bin/env node
 const fs = require('fs')
 const os = require('os')
+const tmp = require('tmp')
 const path = require('path')
 const httpfs = require('httpfs')
 const program = require('commander')
 const request = require('request')
 const readlineSync = require('readline-sync')
-const { execSync, execFileSync } = require('child_process')
+const { exec, execFile, spawn, spawnSync, execSync, execFileSync } = require('child_process')
 
 const USER_FILE = '.pituser.txt'
 const CONNECT_FILE = '.pitconnect.txt'
@@ -523,7 +524,7 @@ program
     .description('removes an entity from the system')
     .on('--help', function() {
         printIntro()
-        printExample('pit remove user:paul')
+        printExample('pit remove user:anna')
         printExample('pit remove node:machine1')
         printExample('pit remove job:123')
         printExample('pit remove alias:gtx1070')
@@ -570,7 +571,7 @@ program
     .description('gets a property of an entity')
     .on('--help', function() {
         printIntro()
-        printExample('pit get user:paul email')
+        printExample('pit get user:anna email')
         printExample('pit get node:machine1 address')
         printExample('pit get alias:gtx1070 name')
         printExample('pit get job:123 autoshare')
@@ -672,7 +673,7 @@ program
         printIntro()
         printExample('pit add-group node:machine1 professors')
         printExample('pit add-group node:machine1:0 students')
-        printExample('pit add-group user:paul students')
+        printExample('pit add-group user:anna students')
         printExample('pit add-group job:123 students')
         printLine()
         printEntityHelp(entityUser, entityNode, entityJob, 'node:<node name>:<resource index>')
@@ -926,34 +927,71 @@ program
     })
 
 program
-    .command('mount <entity> <mountpoint>')
-    .description('mounts an entitie\'s directory to a local mountpoint (an empty directory) and waits for Ctrl-C to unmount again')
+    .command('mount <entity> [mountpoint]')
+    .description('mounts the data directory of an entity to a local mountpoint')
+    .option('--shell', 'starts a shell in the mounted directory. The mount will be automatically unmounted upon shell exit.')
     .on('--help', function() {
         printIntro()
-        printExample('pit mount home ~/pithome')
-        printExample('pit mount job:1234 ./job1234')
+        printExample('pit mount home')
+        printExample('pit mount user:anna ~/annahome')
+        printExample('pit mount --shell job:1234')
         printExample('pit mount group:students ./students')
         printExample('pit mount shared ./shared')
         printLine()
+        printLine('"entity" is the entity whose data directory will be mounted')
         printEntityHelp('home', entityUser, entityJob, entityGroup, 'shared')
-        printLine('Home and group directories are write-enabled.')
+        printLine('"mountpoint" is the directory where the data directory will be mounted onto. Has to be empty. If omitted, a temporary directory will be used as mountpoint and automatically deleted on unmounting.')
+        printLine('Home and group directories are write-enabled, all others are read-only.')
     })
-    .action((entity, mountpoint) => {
-        let endpoint = '/shared'
+    .action((entity, mountpoint, options) => {
+        let endpoint
+        entity = parseEntity(entity)
+        if (entity.type == 'home') {
+            endpoint = '/users/~/fs' 
+        } else if (entity.type == 'group' || entity.type == 'user' || entity.type == 'job') {
+            endpoint = '/' + entity.plural + '/' + entity.id + '/fs'
+        } else if (entity.type == 'shared') {
+            endpoint = '/shared'
+        } else {
+            fail('Unsupported entity type "' + entity.type + '"')
+        }
         getConnectionSettings(connection => {
+            if (mountpoint) {
+                mountpoint = { name: mountpoint, removeCallback: () => {} }
+            } else {
+                mountpoint = tmp.dirSync()
+            }
+            let mountOptions = { 
+                headers: { 'X-Auth-Token': connection.token },
+                cache: true,
+                blocksize: 10 * 1024 * 1024
+            }
+            if (connection.ca) {
+                mountOptions.certificate = connection.ca
+            }
             httpfs.mount(
                 connection.url + endpoint,
-                mountpoint, 
-                { 
-                    headers: { 'X-Auth-Token': connection.token },
-                    certificate: connection.ca,
-                    cache: true,
-                    blocksize: 10 * 1024 * 1024
-                }, 
+                mountpoint.name, 
+                mountOptions, 
                 (err, mount) => {
-                    if (err) { throw err }
-                    console.log('press Ctrl-C to unmount')
-                    globalunmount = mount.unmount
+                    if (err) { 
+                        fail(err) 
+                    }
+                    let unmount = () => mount.unmount(err => {
+                        if (err) {
+                            console.error('problem unmounting filesystem:', err)
+                        } else {
+                            mountpoint.removeCallback()
+                        }
+                    })
+                    if (options.shell) {
+                        console.log('secondary shell: call "exit" to end and unmount')
+                        let sh = spawn(process.env.SHELL || 'bash', ['-i'], { stdio: 'inherit', cwd: mountpoint.name })
+                        sh.on('close', unmount)
+                    } else {
+                        console.log('press Ctrl-C to unmount')
+                        globalunmount = unmount
+                    }
                 }
             )
         })
