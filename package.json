@@ -33,6 +33,7 @@
   "dependencies": {
     "commander": "^2.14.1",
     "readline-sync": "^1.4.9",
-    "request": "^2.87.0"
+    "request": "^2.87.0",
+    "terminfo": "^0.1.1"
   }
 }
