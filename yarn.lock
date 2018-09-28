@@ -588,6 +588,10 @@ supports-color@^2.0.0:
   version "2.0.0"
   resolved "https://registry.yarnpkg.com/supports-color/-/supports-color-2.0.0.tgz#535d045ce6b6363fa40117084629995e9df324c7"
 
+terminfo@^0.1.1:
+  version "0.1.1"
+  resolved "https://registry.yarnpkg.com/terminfo/-/terminfo-0.1.1.tgz#2a5d3abf08b295d990f275fb20082e0c9863d982"
+
 tmp@^0.0.33:
   version "0.0.33"
   resolved "https://registry.yarnpkg.com/tmp/-/tmp-0.0.33.tgz#6d34335889768d21b2bcda0aa277ced3b1bfadf9"
