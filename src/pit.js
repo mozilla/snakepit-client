@@ -6,7 +6,7 @@ const path = require('path')
 const program = require('commander')
 const request = require('request')
 const readlineSync = require('readline-sync')
-const { spawn } = require('child_process')
+const { spawn, execFileSync } = require('child_process')
 
 const USER_FILE = '.pituser.txt'
 const CONNECT_FILE = '.pitconnect.txt'
@@ -118,7 +118,7 @@ function callPit(verb, resource, content, callback, callOptions) {
             } else if (callOptions && callOptions.asStream) {
                 callback(res.statusCode, creq)
             } else {
-                chunks = []
+                let chunks = []
                 creq.on('data', chunk => chunks.push(chunk))
                 creq.on('end', () => {
                     let body = Buffer.concat(chunks)
@@ -201,17 +201,17 @@ function callPit(verb, resource, content, callback, callOptions) {
                         { trueValue: ['yes', 'y'], falseValue: ['no', 'n'] }
                     )
                     if (register) {
-                        user = promptUserInfo()
+                        let user = promptUserInfo()
                         sendRequest('put', userPath, user, function(code, body) {
                             if (code == 200) {
                                 authenticate(username, user.password, sendCommand)
                             } else {
                                 console.error('Unable to register user.')
-                                exit(1)
+                                process.exit(1)
                             }
                         })
                     } else {
-                        exit(0)
+                        process.exit(0)
                     }
                 }
             })
@@ -397,7 +397,7 @@ function splitPair(value, separator, ...names) {
 }
 
 function parseEntity(entity, indexAllowed) {
-    pair = splitPair(entity, ':', 'type', 'id', 'index')
+    let pair = splitPair(entity, ':', 'type', 'id', 'index')
     pair.plural = (pair.type == 'alias') ? 'aliases' : (pair.type + 's')
     if (!indexAllowed && pair.hasOwnProperty('index')) {
         fail('Indices not allowed for ' + pair.type + ' entities')
