@@ -2,6 +2,9 @@
 .pituser.txt
 .pitrequest.txt
 
+.install
+.compute
+
 # Logs
 logs
 *.log
