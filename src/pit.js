@@ -6,7 +6,6 @@ const path = require('path')
 const program = require('commander')
 const request = require('request')
 const readlineSync = require('readline-sync')
-const terminfo = require('terminfo')()
 const { spawn } = require('child_process')
 
 const USER_FILE = '.pituser.txt'
@@ -729,7 +728,6 @@ program
     .description('enqueues current directory as new job')
     .option('-p, --private', 'prevents automatic sharing of this job')
     .option('-c, --continue <jobNumber>', 'continues job with provided number by copying its "keep" directory over to the new job')
-    .option('-w, --watch', 'immediately starts watching the job log output on secondary buffer')
     .option('-l, --log', 'waits for and prints job\'s log output')
     .on('--help', function() {
         printIntro()
@@ -783,12 +781,7 @@ program
                 console.log('Hash:       ' + hash)
                 console.log('Diff LoC:   ' + diff.split('\n').length)
                 console.log('Resources:  "' + clusterRequest + '"')
-                if (options.watch) {
-                    enterSecondary()
-                    clearScreen()
-                    showPreparationLog(body.id)
-                    showLog(body.id, 0, 0)
-                } else if (options.log) {
+                if (options.log) {
                     console.log()
                     showPreparationLog(body.id)
                     showLog(body.id, 0, 0)
@@ -802,7 +795,6 @@ program
 program
     .command('log <jobNumber> [groupIndex] [processIndex]')
     .description('continuously watches job\'s log output')
-    .option('-w, --watch', 'continuous watching')
     .on('--help', function() {
         printIntro()
         printExample('pit log p')
@@ -814,10 +806,6 @@ program
         printLine('"processIndex" is the index number of a process within the specified process group.')
     })
     .action((jobNumber, groupIndex, processIndex, options) => {
-        if (options.watch) {
-            enterSecondary()
-            clearScreen()
-        }
         if (groupIndex == 'p') {
             showPreparationLog(jobNumber)
         } else {
@@ -1013,21 +1001,14 @@ program
 program
     .command('status')
     .description('prints a job status report')
-    .option('-w, --watch', 'continuous watching')
     .on('--help', function() {
         printIntro()
         printExample('pit status')
     })
     .action(function(options) {
         let updateStatus = () => {
-            if (options.watch) {
-                enterSecondary()
-            }
             callPit('get', 'status', function(code, jobGroups) {
                 if (code == 200) {
-                    if (options.watch) {
-                        clearScreen()
-                    }
                     let fixed = 6 + 3 + 12 + 3 + 3 + 10 + 20 + 7
                     let rest = process.stdout.columns
                     if (rest && rest >= fixed) {
@@ -1067,9 +1048,6 @@ program
                 } else {
                     evaluateResponse(code, jobGroups)
                 }
-                if (options.watch) {
-                    setTimeout(updateStatus, 1000)
-                }
             })
         }
         updateStatus()
@@ -1090,31 +1068,6 @@ function writeFragment(text, len, right, padding) {
     process.stdout.write(text + padding)
 }
 
-var inSecondary = false
-
-function enterSecondary() {
-    if (!global.inSecondary) {
-        process.stdout.write(terminfo.saveCursor)
-        process.stdout.write(terminfo.enterCaMode)
-        process.stdout.write(terminfo.cursorInvisible)
-        global.inSecondary = true
-    }
-}
-
-function exitSecondary() {
-    if (global.inSecondary) {
-        process.stdout.write(terminfo.cursorVisible)
-        process.stdout.write(terminfo.exitCaMode)
-        process.stdout.write(terminfo.restoreCursor)
-        global.inSecondary = false
-    }
-}
-
-function clearScreen() {
-    process.stdout.write(terminfo.clearScreen)
-    process.stdout.write(terminfo.cursorHome)
-}
-
 function unmount() {
     if (globalunmount) {
         console.log('\runmounting...')
@@ -1123,17 +1076,12 @@ function unmount() {
     }
 }
 
-function cleanup() {
-    unmount()
-    exitSecondary()
-}
-
 process.on('SIGINT', () => {
-    cleanup()
+    unmount()
     process.exit(0)
 })
 
 process.on('exit', () => {
-    cleanup()
+    unmount()
 })
 
