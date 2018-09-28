@@ -35,5 +35,8 @@
     "readline-sync": "^1.4.9",
     "request": "^2.87.0",
     "tmp": "^0.0.33"
+  },
+  "optionalDependencies": {
+    "httpfs": "git+https://github.com/mozilla/httpfs.git"
   }
 }
