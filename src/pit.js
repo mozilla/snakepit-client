@@ -1,12 +1,13 @@
 #! /usr/bin/env node
 const fs = require('fs')
 const os = require('os')
+const tmp = require('tmp')
 const path = require('path')
 const program = require('commander')
 const request = require('request')
 const readlineSync = require('readline-sync')
-const { execSync, execFileSync } = require('child_process')
 const terminfo = require('terminfo')()
+const { spawn } = require('child_process')
 
 const USER_FILE = '.pituser.txt'
 const CONNECT_FILE = '.pitconnect.txt'
@@ -14,6 +15,8 @@ const REQUEST_FILE = '.pitrequest.txt'
 
 const githubGitPrefix = 'git@github.com:'
 const githubHttpsPrefix = 'https://github.com/'
+
+var globalunmount
 
 function fail(message) {
     console.error('Command failed: ' + message)
@@ -138,7 +141,7 @@ function callPit(verb, resource, content, callback, callOptions) {
         sendRequest('post', 'users/' + username + '/authenticate', { password: password }, function(code, body) {
             if (code == 200) {
                 token = body.token
-                fs.writeFile(userFile, username + '\n' + token, function(err) {
+                fs.writeFile(userFile, username + '\n' + token, { mode: parseInt('600', 8) }, function(err) {
                     if(err) {
                         console.error('Unable to store user info: ' + err)
                         process.exit(1)
@@ -166,7 +169,15 @@ function callPit(verb, resource, content, callback, callOptions) {
     }
 
     function sendCommand() {
-        sendRequest(verb, resource, content, callback, callOptions)
+        if (verb == 'connection') {
+            callback({
+                url: pitUrl,
+                token: token,
+                ca: agentOptions && agentOptions.ca
+            })
+        } else {
+            sendRequest(verb, resource, content, callback, callOptions)
+        }
     }
 
     if(!fs.existsSync(userFile)) {
@@ -215,6 +226,10 @@ function callPit(verb, resource, content, callback, callOptions) {
     }
 }
 
+function getConnectionSettings(callback) {
+    callPit('connection', null, null, callback)
+}
+
 const jobStates = {
     NEW: 0,
     PREPARING: 1,
@@ -246,8 +261,9 @@ const nodeStateNames = [
 
 const indent = '  '
 const entityUser = 'user:<username>'
+const entityGroup = 'group:<group name>'
 const entityNode = 'node:<node name>'
-const entityJob = 'node:<job number>'
+const entityJob = 'job:<job number>'
 const entityAlias = 'alias:<alias>'
 
 const entityDescriptors = {
@@ -508,7 +524,7 @@ program
     .description('removes an entity from the system')
     .on('--help', function() {
         printIntro()
-        printExample('pit remove user:paul')
+        printExample('pit remove user:anna')
         printExample('pit remove node:machine1')
         printExample('pit remove job:123')
         printExample('pit remove alias:gtx1070')
@@ -555,7 +571,7 @@ program
     .description('gets a property of an entity')
     .on('--help', function() {
         printIntro()
-        printExample('pit get user:paul email')
+        printExample('pit get user:anna email')
         printExample('pit get node:machine1 address')
         printExample('pit get alias:gtx1070 name')
         printExample('pit get job:123 autoshare')
@@ -657,7 +673,7 @@ program
         printIntro()
         printExample('pit add-group node:machine1 professors')
         printExample('pit add-group node:machine1:0 students')
-        printExample('pit add-group user:paul students')
+        printExample('pit add-group user:anna students')
         printExample('pit add-group job:123 students')
         printLine()
         printEntityHelp(entityUser, entityNode, entityJob, 'node:<node name>:<resource index>')
@@ -911,6 +927,90 @@ program
     })
 
 program
+    .command('mount <entity> [mountpoint]')
+    .description('mounts the data directory of an entity to a local mountpoint')
+    .option('--shell', 'starts a shell in the mounted directory. The mount will be automatically unmounted upon shell exit.')
+    .on('--help', function() {
+        printIntro()
+        printExample('pit mount home')
+        printExample('pit mount user:anna ~/annahome')
+        printExample('pit mount --shell job:1234')
+        printExample('pit mount group:students ./students')
+        printExample('pit mount shared ./shared')
+        printLine()
+        printLine('"entity" is the entity whose data directory will be mounted')
+        printEntityHelp('home', entityUser, entityJob, entityGroup, 'shared')
+        printLine('"mountpoint" is the directory where the data directory will be mounted onto. Has to be empty. If omitted, a temporary directory will be used as mountpoint and automatically deleted on unmounting.')
+        printLine('Home and group directories are write-enabled, all others are read-only.')
+    })
+    .action((entity, mountpoint, options) => {
+        let httpfs
+        try {
+            httpfs = require('httpfs')
+        } catch (ex) {
+            fail(
+                'For mounting, package "httpfs" has to be installed.\n' +
+                'Most likely it has been skipped due to missing dependencies.\n' +
+                'Please consult the following page for system specific requirements:\n' +
+                '\thttps://github.com/mafintosh/fuse-bindings#requirements\n' +
+                'Once fulfilled, you can either re-install snakepit-client or\n' +
+                'call again "yarn install" or "npm install" within its project root.'
+            )
+        }
+        let endpoint
+        entity = parseEntity(entity)
+        if (entity.type == 'home') {
+            endpoint = '/users/~/fs' 
+        } else if (entity.type == 'group' || entity.type == 'user' || entity.type == 'job') {
+            endpoint = '/' + entity.plural + '/' + entity.id + '/fs'
+        } else if (entity.type == 'shared') {
+            endpoint = '/shared'
+        } else {
+            fail('Unsupported entity type "' + entity.type + '"')
+        }
+        getConnectionSettings(connection => {
+            if (mountpoint) {
+                mountpoint = { name: mountpoint, removeCallback: () => {} }
+            } else {
+                mountpoint = tmp.dirSync()
+            }
+            let mountOptions = { 
+                headers: { 'X-Auth-Token': connection.token },
+                cache: true,
+                blocksize: 10 * 1024 * 1024
+            }
+            if (connection.ca) {
+                mountOptions.certificate = connection.ca
+            }
+            httpfs.mount(
+                connection.url + endpoint,
+                mountpoint.name, 
+                mountOptions, 
+                (err, mount) => {
+                    if (err) { 
+                        fail(err) 
+                    }
+                    let unmount = () => mount.unmount(err => {
+                        if (err) {
+                            console.error('problem unmounting filesystem:', err)
+                        } else {
+                            mountpoint.removeCallback()
+                        }
+                    })
+                    if (options.shell) {
+                        console.log('secondary shell: call "exit" to end and unmount')
+                        let sh = spawn(process.env.SHELL || 'bash', ['-i'], { stdio: 'inherit', cwd: mountpoint.name })
+                        sh.on('close', unmount)
+                    } else {
+                        console.log('press Ctrl-C to unmount')
+                        globalunmount = unmount
+                    }
+                }
+            )
+        })
+    })
+
+program
     .command('status')
     .description('prints a job status report')
     .option('-w, --watch', 'continuous watching')
@@ -1015,12 +1115,25 @@ function clearScreen() {
     process.stdout.write(terminfo.cursorHome)
 }
 
-process.on('SIGINT', () => {
+function unmount() {
+    if (globalunmount) {
+        console.log('\runmounting...')
+        globalunmount()
+        globalunmount = null
+    }
+}
+
+function cleanup() {
+    unmount()
     exitSecondary()
+}
+
+process.on('SIGINT', () => {
+    cleanup()
     process.exit(0)
 })
 
 process.on('exit', () => {
-    exitSecondary()
+    cleanup()
 })
 
