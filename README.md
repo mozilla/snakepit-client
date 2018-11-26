@@ -1,6 +1,13 @@
 # snakepit-client
 Client for the snakepit machine learning job scheduler
 
+## N.B.
+
+- You must `git commit` local changes before they can be run on the cluster.
+
+- You must `git branch --set-upstream-to=origin/your_branch` to set the tracking branch correctly.
+
+
 ## Getting Started
 
 - `$ git clone https://github.com/mozilla/snakepit-client`
@@ -21,3 +28,4 @@ or
 2) If your pit admin provided a ".pitconnect.txt" file, place it either in your home directory (as default pit) or the (overruling) project root.
 
 `mv .pitconnect.txt ~/.pitconnect.txt`
+
