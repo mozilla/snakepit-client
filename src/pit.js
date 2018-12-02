@@ -464,18 +464,7 @@ function runCommand() {
     return _runCommand(Array.prototype.slice.call(arguments), true)
 }
 
-function showPreparationLog(jobNumber) {
-    callPit('get', 'jobs/' + jobNumber + '/preplog', (code, res) => {
-        evaluateResponse(code)
-        res.on('data', chunk => {
-            process.stdout.write(chunk)
-        })
-    }, { asStream: true })
-}
-
 function showLog(jobNumber) {
-    groupIndex = groupIndex || 0
-    processIndex = processIndex || 0
     let logPath = 'jobs/' + jobNumber + '/log'
     callPit('get', logPath, (code, res) => {
         evaluateResponse(code)
@@ -786,8 +775,7 @@ program
                 console.log('Resources:  "' + clusterRequest + '"')
                 if (options.log) {
                     console.log()
-                    showPreparationLog(body.id)
-                    showLog(body.id, 0, 0)
+                    showLog(body.id)
                 }
             } else {
                 evaluateResponse(code, body)
@@ -805,7 +793,7 @@ program
         printLine()
     })
     .action((jobNumber, options) => {
-        showLog(jobNumber, groupIndex, processIndex)
+        showLog(jobNumber)
     })
 
 program
