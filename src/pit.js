@@ -38,8 +38,11 @@ function promptUserInfo(user) {
 
 function promptNodeInfo(node) {
     node = node || {}
-    if (!node.address) {
-        node.address = readlineSync.question('Node\'s domain name or IP address: ')
+    if (!node.endpoint) {
+        node.endpoint = readlineSync.question('LXD endpoint: ')
+    }
+    if (!node.password) {
+        node.password = readlineSync.question('LXD endpoint password: ', { hideEchoBack: true })
     }
     return node
 }
@@ -470,10 +473,10 @@ function showPreparationLog(jobNumber) {
     }, { asStream: true })
 }
 
-function showLog(jobNumber, groupIndex, processIndex) {
+function showLog(jobNumber) {
     groupIndex = groupIndex || 0
     processIndex = processIndex || 0
-    let logPath = 'jobs/' + jobNumber + '/groups/' + groupIndex + '/processes/' + processIndex + '/log'
+    let logPath = 'jobs/' + jobNumber + '/log'
     callPit('get', logPath, (code, res) => {
         evaluateResponse(code)
         res.on('data', chunk => {
@@ -491,7 +494,7 @@ program
     .on('--help', function() {
         printIntro()
         printExample('pit add user:paul email=paul@x.y password=secret')
-        printExample('pit add node:machine1 address=192.168.2.2')
+        printExample('pit add node:machine1 endpoint=192.168.2.2 password=secret')
         printExample('pit add alias:gtx1070 name="GeForce GTX 1070"')
         printLine()
         printEntityHelp(entityUser, entityNode)
@@ -793,24 +796,16 @@ program
     })
 
 program
-    .command('log <jobNumber> [groupIndex] [processIndex]')
-    .description('continuously watches job\'s log output')
+    .command('log <jobNumber>')
+    .description('show job\'s log')
+    .option('-f, --follow', 'continuously shows further log output if the job is still running')
     .on('--help', function() {
         printIntro()
-        printExample('pit log p')
-        printExample('pit log 1234')
-        printExample('pit log 1234 0 1')
+        printExample('pit log -f')
         printLine()
-        printLine('"jobNumber" is the number of the job who\'s log should be shown.')
-        printLine('"groupIndex" is the index number of a specific process group. if set to "p", the preparation log is shown and "processIndex" ignored.')
-        printLine('"processIndex" is the index number of a process within the specified process group.')
     })
-    .action((jobNumber, groupIndex, processIndex, options) => {
-        if (groupIndex == 'p') {
-            showPreparationLog(jobNumber)
-        } else {
-            showLog(jobNumber, groupIndex, processIndex)
-        }
+    .action((jobNumber, options) => {
+        showLog(jobNumber, groupIndex, processIndex)
     })
 
 program
