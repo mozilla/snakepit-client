@@ -720,10 +720,12 @@ program
     .description('enqueues current directory as new job')
     .option('-p, --private', 'prevents automatic sharing of this job')
     .option('-c, --continue <jobNumber>', 'continues job with provided number by copying its "keep" directory over to the new job')
+    .option('-d, --direct <commands>', 'directly executes provided commands through bash instead of loading .compute file')
     .option('-l, --log', 'waits for and prints job\'s log output')
     .on('--help', function() {
         printIntro()
-        printExample('pit put 2:[8:gtx1070]')
+        printExample('pit run "My task" 2:[8:gtx1070]')
+        printExample('pit run "My command" [] \'hostname; env\'')
         printLine()
         printLine('"title" is a short text that will later help identifying the job and its purpose.')
         printLine('"clusterRequest" is an expression to specify resources this job requires from the cluster.')
@@ -765,7 +767,8 @@ program
             clusterRequest: clusterRequest,
             description: title,
             private: options.private,
-            continueJob: options.continue
+            continueJob: options.continue,
+            script: options.direct
         }, (code, body) => {
             if (code == 200) {
                 console.log('Job number: ' + body.id)
