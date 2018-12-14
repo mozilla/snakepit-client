@@ -920,15 +920,15 @@ program
     .action((entity, mountpoint, options) => {
         let httpfs
         try {
-            httpfs = require('httpfs')
+            httpfs = require('./httpfs.js')
         } catch (ex) {
             fail(
-                'For mounting, package "httpfs" has to be installed.\n' +
+                'For mounting, package "fuse" has to be installed.\n' +
                 'Most likely it has been skipped due to missing dependencies.\n' +
                 'Please consult the following page for system specific requirements:\n' +
                 '\thttps://github.com/mafintosh/fuse-bindings#requirements\n' +
                 'Once fulfilled, you can either re-install snakepit-client or\n' +
-                'call again "yarn install" or "npm install" within its project root.'
+                'call again "npm install" within its project root.'
             )
         }
         let endpoint
