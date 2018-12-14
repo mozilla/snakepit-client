@@ -725,13 +725,13 @@ program
     .on('--help', function() {
         printIntro()
         printExample('pit run "My task" 2:[8:gtx1070]')
-        printExample('pit run "My command" [] \'hostname; env\'')
+        printExample('pit run "My command" [] -d \'hostname; env\'')
         printLine()
         printLine('"title" is a short text that will later help identifying the job and its purpose.')
         printLine('"clusterRequest" is an expression to specify resources this job requires from the cluster.')
         printLine('It\'s a comma separated list of "process requests".')
         printLine('Each "process request" specifies the number of process instances and (divided by colon and in braces) which resources to allocate for one process instances (on one node).')
-        printLine('The example above will allocate 2 process instances. For each process, 8 "gtx1070" resources will get allocated.')
+        printLine('The first example will allocate 2 process instances. For each process, 8 "gtx1070" resources will get allocated.')
         printLine('You can also provide a "' + REQUEST_FILE + '" file with the same content in your project root as default value.')
     })
     .action(function(title, clusterRequest, options) {
