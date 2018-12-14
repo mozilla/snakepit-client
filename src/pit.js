@@ -1039,6 +1039,12 @@ program
         updateStatus()
     })
 
+program
+    .command('*')
+    .action(function() {
+        fail("unknown command");
+    })
+
 program.parse(process.argv)
 
 if (!process.argv.slice(2).length) {
