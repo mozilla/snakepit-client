@@ -211,8 +211,8 @@ allocates __1__ process with __2__ GPUs,
 ```
 2:[gtx1070]
 ```
-allocates __2__ process with __1__ GPU each.
-The square brackets represent a process and `n:` prefixes are quantifies. No quantifier means "1:".
+allocates __2__ processes with __1__ GPU each.
+The square brackets represent a process and `n:` prefixes are quantifiers. No quantifier means "1:".
 
 It's also possible to allocate processes without GPUs and processes with multiple - comma-separated - GPU types:
 ```
@@ -226,7 +226,7 @@ It's important to keep in mind that one process cannot be split in half and sche
 ### Communicating with other processes
 
 Once you allocated multiple processes for a job, the instances have to be able to communicate with each other.
-This can be achived through a set of environment variables that is provided to each process/script-instance:
+This can be achieved through a set of environment variables that is provided to each process/script-instance:
 
 * `$NUM_GROUPS`: Number of (comma separated) "process-groups". E.g. allocation "2:[],[gtx1060]" represents two process-groups.
 * `$NUM_PROCESSES_GROUP<i>`: Number of processes in process-group with index i. E.g. in "2:[],[gtx1060]" the value of `$NUM_PROCESSES_GROUP0` is 2.
