@@ -55,6 +55,14 @@ function promptAliasInfo(alias) {
     return alias
 }
 
+function promptGroupInfo(group) {
+    group = group || {}
+    if (!group.title) {
+        group.title = readlineSync.question('Group title: ')
+    }
+    return group
+}
+
 function callPit(verb, resource, content, callback, callOptions) {
     if (content instanceof Function) {
         callOptions = callback
@@ -312,6 +320,9 @@ const entityDescriptors = {
     },
     'alias': {
         'name': 'Resource\'s name'
+    },
+    'group': {
+        'title': 'Group\'s title'
     }
 }
 
@@ -485,8 +496,9 @@ program
         printExample('pit add user:paul email=paul@x.y password=secret')
         printExample('pit add node:machine1 endpoint=192.168.2.2 password=secret')
         printExample('pit add alias:gtx1070 name="GeForce GTX 1070"')
+        printExample('pit add group:students title="Students of machine learning department"')
         printLine()
-        printEntityHelp(entityUser, entityNode)
+        printEntityHelp(entityUser, entityNode, entityAlias, entityGroup)
         printPropertyHelp()
         printUserPropertyHelp()
         printNodePropertyHelp()
@@ -494,14 +506,16 @@ program
     })
     .action(function(entity, properties) {
         entity = parseEntity(entity)
-        if(entity.type == 'user' || entity.type == 'node' || entity.type == 'alias') {
+        if(entity.type == 'user' || entity.type == 'node' || entity.type == 'alias' || entity.type == 'group') {
             let obj = parseEntityProperties(entity, properties)
             if (entity.type == 'user') {
                 obj = promptUserInfo(obj)
             } else if (entity.type == 'node') {
                 obj = promptNodeInfo(obj)
-            } else {
+            } else if (entity.type == 'alias') {
                 obj = promptAliasInfo(obj)
+            } else {
+                obj = promptGroupInfo(obj)
             }
             callPit('put', entity.plural + '/' + entity.id, obj, evaluateResponse)
         } else {
@@ -519,12 +533,13 @@ program
         printExample('pit remove node:machine1')
         printExample('pit remove job:123')
         printExample('pit remove alias:gtx1070')
+        printExample('pit remove group:students')
         printLine()
-        printEntityHelp(entityUser, entityNode, entityJob, entityAlias)
+        printEntityHelp(entityUser, entityNode, entityJob, entityAlias, entityGroup)
     })
     .action(function(entity) {
         entity = parseEntity(entity)
-        if(entity.type == 'user' || entity.type == 'node' || entity.type == 'job' || entity.type == 'alias') {
+        if(entity.type == 'user' || entity.type == 'node' || entity.type == 'job' || entity.type == 'alias' || entity.type == 'group') {
             callPit('del', entity.plural + '/' + entity.id, evaluateResponse)
         } else {
             fail('Unsupported entity type "' + entity.type + '"')
@@ -537,11 +552,12 @@ program
     .on('--help', function() {
         printIntro()
         printExample('pit set user:paul email=x@y.z fullname="Paul Smith"')
-        printExample('pit set node:machine1 adremotedress=192.168.2.1')
+        printExample('pit set node:machine1 endpoint=192.168.2.1')
         printExample('pit set alias:gtx1070 name="GeForce GTX 1070"')
+        printExample('pit set group:students title="Different title"')
         printExample('pit set job:123 autoshare=students,professors')
         printLine()
-        printEntityHelp(entityUser, entityNode, entityJob, entityAlias)
+        printEntityHelp(entityUser, entityNode, entityAlias, entityGroup, entityJob)
         printPropertyHelp()
         printUserPropertyHelp()
         printNodePropertyHelp()
@@ -549,7 +565,7 @@ program
     })
     .action(function(entity, assignments) {
         entity = parseEntity(entity)
-        if(entity.type == 'user' || entity.type == 'node') {
+        if(entity.type == 'user' || entity.type == 'node' || entity.type == 'alias' || entity.type == 'group' || entity.type == 'job') {
             let obj = parseEntityProperties(entity, assignments)
             callPit('put', entity.plural + '/' + entity.id, obj, evaluateResponse)
         } else {
@@ -604,8 +620,9 @@ program
         printExample('pit show node:machine1')
         printExample('pit show job:235')
         printExample('pit show alias:gtx1070')
+        printExample('pit show group:students')
         printLine()
-        printEntityHelp('me', 'users', 'groups', 'nodes', 'jobs', 'aliases', entityUser, entityNode, entityJob, entityAlias)
+        printEntityHelp('me', 'users', 'groups', 'nodes', 'jobs', 'aliases', entityUser, entityNode, entityJob, entityAlias, entityGroup)
     })
     .action(function(entity, options) {
         if(entity === 'users' || entity === 'groups' || entity === 'nodes' || entity === 'jobs' || entity === 'aliases') {
@@ -993,7 +1010,7 @@ program
     })
     .action(function(options) {
         let updateStatus = () => {
-            callPit('get', 'status', function(code, jobGroups) {
+            callPit('get', 'jobs/status', function(code, jobGroups) {
                 if (code == 200) {
                     let fixed = 6 + 3 + 12 + 3 + 3 + 10 + 20 + 7
                     let rest = process.stdout.columns
