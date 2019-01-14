@@ -319,10 +319,12 @@ const entityDescriptors = {
         ]
     },
     'alias': {
-        'name': 'Resource\'s name'
+        'id': 'Alias',
+        'name': 'For'
     },
     'group': {
-        'title': 'Group\'s title'
+        'id': 'Name',
+        'title': 'Title'
     }
 }
 
