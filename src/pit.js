@@ -288,12 +288,8 @@ const entityDescriptors = {
     'node': {
         'id': 'Node name',
         'address': 'Address',
-        'state': (o, v) => ['State', nodeStateNames[v]],
+        'state': (o, v) => ['State', v ? 'ONLINE' : 'OFFLINE'],
         'since': 'Since',
-        'port': 'SSH Port',
-        'minPort': 'Min-Port',
-        'maxPort': 'Max-Port',
-        'user': 'Remote user',
         'resources': (o, v) => v && [
             'Resources',
             '\n' + v.map((r, i) =>
