@@ -288,7 +288,7 @@ const entityDescriptors = {
     'node': {
         'id': 'Node name',
         'address': 'Address',
-        'state': (o, v) => ['State', v ? 'ONLINE' : 'OFFLINE'],
+        'online': (o, v) => ['State', v ? 'ONLINE' : 'OFFLINE'],
         'since': 'Since',
         'resources': (o, v) => v && [
             'Resources',
@@ -302,16 +302,23 @@ const entityDescriptors = {
     },
     'job': {
         'id': 'Job number',
+        'continueJob': 'Continued job',
         'description': 'Title',
         'user': 'Owner',
         'groups': (o, v) => v && ['Groups', v.join(' ')],
         'error': (o, v) => v && ['Error', '"' + v + '"'],
         'provisioning': 'Provisioning',
         'resources': 'Resources',
+        'utilComp': (o, v) => v && ['Util. GPU', Math.round(v * 100.0) + ' %'],
+        'utilMem':  (o, v) => v && ['Util. memory',  Math.round(v * 100.0) + ' %'],
         'state': (o, v) => ['State', jobStateNames[v] + (v == jobStates.WAITING ? ' (position ' + o.schedulePosition + ')' : '')],
+        'processes': (o, v) => v && [
+            'Processes', 
+            '\n' + v.map(p => '  [' + p.groupIndex + ', ' + p.processIndex + ']: Status code: ' + p.status + (p.result ? (' - ' + p.result) : '')).join('\n')
+        ],
         'stateChanges': (o, v) => v && [
             'State changes',
-            '\n' + Object.keys(v).map(state => '  ' + jobStateNames[state] + ': ' + v[state]).join('\n')
+            '\n' + v.map(sc => '  ' + jobStateNames[sc.state] + ': ' + sc.since + (sc.reason ? (' - ' + sc.reason) : '')).join('\n')
         ]
     },
     'alias': {
@@ -483,6 +490,45 @@ function showLog(jobNumber) {
     }, { asStream: true })
 }
 
+function printJobGroups(groups, asDate) {
+    let fixed = 6 + 3 + (asDate ? 24 : 12) + 3 + 3 + 10 + 20 + 7
+    let rest = process.stdout.columns
+    if (rest && rest >= fixed) {
+        rest = rest - fixed
+    } else {
+        rest = 30
+    }
+    writeFragment('JOB', 6, true, ' ')
+    writeFragment('S', 3, true, ' ')
+    writeFragment(asDate ? 'DATE' : 'SINCE', asDate ? 24 : 12, false, ' ')
+    writeFragment('UC%', 3, true, ' ')
+    writeFragment('UM%', 3, true, ' ')
+    writeFragment('USER', 10, false, ' ')
+    writeFragment('TITLE', 20, false, ' ')
+    writeFragment('RESOURCE', rest, false, '\n')
+
+    let printJobs = (jobs, caption) => {
+        if (jobs.length > 0) {
+            if (caption) {
+                console.log(caption + ':')
+            }
+            for(let job of jobs) {
+                writeFragment(job.id, 6, true, ' ')
+                writeFragment(jobStateNames[job.state], 3, true, ' ')
+                writeFragment(asDate ? job.date : formatDuration(job.since), asDate ? 24 : 12, false, ' ')
+                writeFragment(Math.round(job.utilComp * 100.0), 3, true, ' ')
+                writeFragment(Math.round(job.utilMem * 100.0), 3, true, ' ')
+                writeFragment(job.user, 10, false, ' ')
+                writeFragment(job.description, 20, false, ' ')
+                writeFragment(job.resources, rest, false, '\n')
+            }
+        }
+    }
+    for(let group of groups) {
+        printJobs(group.jobs, group.caption)
+    }
+}
+
 program
     .version('0.0.1')
 
@@ -604,7 +650,7 @@ program
     })
 
 program
-    .command('show <entity>')
+    .command('show <entity> [params...]')
     .description('shows info about an entity')
     .on('--help', function() {
         printIntro()
@@ -622,11 +668,25 @@ program
         printLine()
         printEntityHelp('me', 'users', 'groups', 'nodes', 'jobs', 'aliases', entityUser, entityNode, entityJob, entityAlias, entityGroup)
     })
-    .action(function(entity, options) {
-        if(entity === 'users' || entity === 'groups' || entity === 'nodes' || entity === 'jobs' || entity === 'aliases') {
+    .action(function(entity, params, options) {
+        if(entity === 'users' || entity === 'groups' || entity === 'nodes' || entity === 'aliases') {
             callPit('get', entity, function(code, body) {
                 if (code == 200) {
                     body.forEach(obj => console.log(obj))
+                } else {
+                    evaluateResponse(code, body)
+                }
+            })
+        } else if(entity === 'jobs') {
+            let obj = parseEntityProperties(entity, params)
+            let query = []
+            for(let param of Object.keys(obj)) {
+                query.push(encodeURI(param) + '=' + encodeURI(obj[param]))
+            }
+            query = query.length > 0 ? '?' + query.join('&') : ''
+            callPit('get', entity + query, function(code, body) {
+                if (code == 200) {
+                    printJobGroups([{ jobs: body }], true)
                 } else {
                     evaluateResponse(code, body)
                 }
@@ -1010,42 +1070,11 @@ program
         let updateStatus = () => {
             callPit('get', 'jobs/status', function(code, jobGroups) {
                 if (code == 200) {
-                    let fixed = 6 + 3 + 12 + 3 + 3 + 10 + 20 + 7
-                    let rest = process.stdout.columns
-                    if (rest && rest >= fixed) {
-                        rest = rest - fixed
-                    } else {
-                        rest = 30
-                    }
-                    writeFragment('JOB', 6, true, ' ')
-                    writeFragment('S', 3, true, ' ')
-                    writeFragment('SINCE', 12, false, ' ')
-                    writeFragment('UC%', 3, true, ' ')
-                    writeFragment('UM%', 3, true, ' ')
-                    writeFragment('USER', 10, false, ' ')
-                    writeFragment('TITLE', 20, false, ' ')
-                    writeFragment('RESOURCE', rest, false, '\n')
-
-                    let printJobs = (jobs, caption) => {
-                        if (jobs.length > 0) {
-                            if (caption) {
-                                console.log(caption + ':')
-                            }
-                            for(let job of jobs) {
-                                writeFragment(job.id, 6, true, ' ')
-                                writeFragment(jobStateNames[job.state], 3, true, ' ')
-                                writeFragment(formatDuration(job.since), 12, false, ' ')
-                                writeFragment(Math.round(job.utilComp), 3, true, ' ')
-                                writeFragment(Math.round(job.utilMem), 3, true, ' ')
-                                writeFragment(job.user, 10, false, ' ')
-                                writeFragment(job.description, 20, false, ' ')
-                                writeFragment(job.resources, rest, false, '\n')
-                            }
-                        }
-                    }
-                    printJobs(jobGroups.running, 'Running')
-                    printJobs(jobGroups.waiting, 'Waiting')
-                    printJobs(jobGroups.done, 'Done')
+                    printJobGroups([
+                        { jobs: jobGroups.running, caption: 'Running' },
+                        { jobs: jobGroups.waiting, caption: 'Waiting' },
+                        { jobs: jobGroups.done,    caption: 'Done'    }
+                    ])
                 } else {
                     evaluateResponse(code, jobGroups)
                 }
