@@ -964,8 +964,6 @@ program
                         }
                     } else if (localStats.isFile()) {
                         offset = localStats.size
-                    } else {
-                        fail('Cannot write to target.')
                     }
                 } else {
                     let dirname = path.dirname(fsPath)
