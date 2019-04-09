@@ -491,7 +491,7 @@ function showLog(jobNumber) {
 }
 
 function printJobGroups(groups, asDate) {
-    let fixed = 6 + 3 + (asDate ? 24 : 12) + 3 + 3 + 10 + 20 + 7
+    let fixed = 6 + 3 + (asDate ? 24 : 12) + 3 + 3 + 10 + 40 + 7
     let rest = process.stdout.columns
     if (rest && rest >= fixed) {
         rest = rest - fixed
@@ -504,7 +504,7 @@ function printJobGroups(groups, asDate) {
     writeFragment('UC%', 3, true, ' ')
     writeFragment('UM%', 3, true, ' ')
     writeFragment('USER', 10, false, ' ')
-    writeFragment('TITLE', 20, false, ' ')
+    writeFragment('TITLE', 40, false, ' ')
     writeFragment('RESOURCE', rest, false, '\n')
 
     let printJobs = (jobs, caption) => {
@@ -519,7 +519,7 @@ function printJobGroups(groups, asDate) {
                 writeFragment(Math.round(job.utilComp * 100.0), 3, true, ' ')
                 writeFragment(Math.round(job.utilMem * 100.0), 3, true, ' ')
                 writeFragment(job.user, 10, false, ' ')
-                writeFragment(job.description, 20, false, ' ')
+                writeFragment(job.description, 40, false, ' ')
                 writeFragment(job.resources, rest, false, '\n')
             }
         }
@@ -844,9 +844,6 @@ program
         if (!clusterRequest) {
             fail('No resources requested from cluster. Please provide them either through command line or through a "' + REQUEST_FILE + '" file in your project root.')
         }
-        if (title.length > 20) {
-            fail('Job title too long (20 characters max)')
-        }
         callPit('post', 'jobs', {
             origin: originUrl,
             hash: hash,
@@ -1109,7 +1106,9 @@ if (!process.argv.slice(2).length) {
 
 function writeFragment(text, len, right, padding) {
     text = text + ''
-    text = text.substr(0, len)
+    if (text.length > len) {
+        text = text.substring(0, len-1) + '…';
+    }
     padding = typeof padding == 'string' ? padding : ''
     let space = Array(len - text.length + 1).join(' ')
     text = right ? (space + text) : (text + space)
