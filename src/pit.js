@@ -529,6 +529,24 @@ function printJobGroups(groups, asDate) {
     }
 }
 
+function getEntityPath (entity) {
+    entity = parseEntity(entity)
+    if (entity.type == 'home') {
+        return 'users/~'
+    }
+    if (entity.type == 'group' || entity.type == 'user' || entity.type == 'job') {
+        return '' + entity.plural + '/' + entity.id
+    }
+    if (entity.type == 'shared') {
+        return 'shared'
+    }
+    fail('Unsupported entity type "' + entity.type + '"')
+}
+
+function getResourcePath (remotePath) {
+    return remotePath ? (remotePath.startsWith('/') ? remotePath.slice(1) : remotePath) : ''
+}
+
 program
     .version('0.0.1')
 
@@ -905,24 +923,25 @@ program
     })
 
 program
-    .command('ls <jobNumber> [path]')
+    .command('ls <entity> [remotePath]')
     .description('lists contents within a job directory')
     .on('--help', function() {
         printIntro()
-        printExample('pit mount 1234 ./job1234')
+        printExample('pit ls 1234 ./job1234')
         printLine()
-        printLine('"jobNumber" is the number of the job who\'s job directory should be accessed.')
-        printLine('"path" is the path to list within the job directory.')
+        printLine('"entity" is the entity whose data directory should be accessed')
+        printEntityHelp('home', entityUser, entityJob, entityGroup, 'shared')
+        printLine('"remotePath" is the path to list within the remote data directory.')
     })
-    .action((jobNumber, path) => {
-        let job = 'jobs/' + jobNumber + '/'
-        let resource = path ? (path.startsWith('/') ? path.slice(1) : path) : ''
-        callPit('get', job + 'stats/' + resource, (code, stats) => {
+    .action((entity, remotePath) => {
+        let entityPath = getEntityPath(entity)
+        let resource = getResourcePath(remotePath)
+        callPit('get', entityPath + '/simplefs/stats/' + resource, (code, stats) => {
             evaluateResponse(code)
             if (stats.isFile) {
                 console.log('F ' + resource)
             } else {
-                callPit('get', job + 'content/' + resource, (code, contents) => {
+                callPit('get', entityPath + '/simplefs/content/' + resource, (code, contents) => {
                     evaluateResponse(code)
                     for(let dir of contents.dirs) {
                         console.log('D ' + dir)
@@ -936,27 +955,28 @@ program
     })
 
 program
-    .command('cp <jobNumber> <jobPath> <fsPath>')
-    .description('copies contents within from job directory to local file system')
+    .command('cp <entity> <remotePath> <fsPath>')
+    .description('copies contents from job directory to local file system')
     .on('--help', function() {
         printIntro()
         printExample('pit cp 1234 keep/checkpoint-0001.bin ./checkpoint.bin')
         printLine()
-        printLine('"jobNumber" is the number of the job who\'s job directory should be accessed.')
-        printLine('"jobPath" is the source path within the job directory.')
+        printLine('"entity" is the entity whose data directory should be accessed')
+        printEntityHelp('home', entityUser, entityJob, entityGroup, 'shared')
+        printLine('"remotePath" is the source path within the remote data directory.')
         printLine('"fsPath" is the destination path within local filesystem.')
     })
-    .action((jobNumber, jobPath, fsPath) => {
-        let job = 'jobs/' + jobNumber + '/'
-        let resource = jobPath ? (jobPath.startsWith('/') ? jobPath.slice(1) : jobPath) : ''
-        callPit('get', job + 'stats/' + resource, (code, stats) => {
+    .action((entity, remotePath, fsPath) => {
+        let entityPath = getEntityPath(entity)
+        let resource = getResourcePath(remotePath)
+        callPit('get', entityPath + '/simplefs/stats/' + resource, (code, stats) => {
             evaluateResponse(code)
             if (stats.isFile) {
                 let offset = 0
                 if (fs.existsSync(fsPath)) {
                     let localStats = fs.statSync(fsPath)
                     if (localStats.isDirectory()) {
-                        let rname = jobPath.substring(jobPath.lastIndexOf('/') + 1)
+                        let rname = remotePath.substring(remotePath.lastIndexOf('/') + 1)
                         if (rname.length > 0) {
                             fsPath = path.join(fsPath, rname)
                         } else {
@@ -975,7 +995,7 @@ program
                         fail('Target directory not existing.')
                     }
                 }
-                callPit('get', job + 'content/' + resource, (code, res) => {
+                callPit('get', entityPath + '/simplefs/content/' + resource, (code, res) => {
                     evaluateResponse(code)
                     res.pipe(fs.createWriteStream(fsPath))
                 }, { asStream: true }) // offset: offset
@@ -1016,17 +1036,6 @@ program
                 'call again "npm install" within its project root.'
             )
         }
-        let endpoint
-        entity = parseEntity(entity)
-        if (entity.type == 'home') {
-            endpoint = '/users/~/fs' 
-        } else if (entity.type == 'group' || entity.type == 'user' || entity.type == 'job') {
-            endpoint = '/' + entity.plural + '/' + entity.id + '/fs'
-        } else if (entity.type == 'shared') {
-            endpoint = '/shared'
-        } else {
-            fail('Unsupported entity type "' + entity.type + '"')
-        }
         getConnectionSettings(connection => {
             if (mountpoint) {
                 mountpoint = { name: mountpoint, removeCallback: () => {} }
@@ -1042,7 +1051,7 @@ program
                 mountOptions.certificate = connection.ca
             }
             httpfs.mount(
-                connection.url + endpoint,
+                connection.url + getEntityPath(entity) + '/fs',
                 mountpoint.name, 
                 mountOptions, 
                 (err, mount) => {
