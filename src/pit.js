@@ -529,8 +529,8 @@ function printJobGroups(groups, asDate) {
     }
 }
 
-function getEntityPath (entity) {
-    entity = parseEntity(entity)
+function getEntityPath (entitySpec) {
+    entity = parseEntity(entitySpec)
     if (entity.type == 'home') {
         return 'users/~'
     }
@@ -539,6 +539,9 @@ function getEntityPath (entity) {
     }
     if (entity.type == 'shared') {
         return 'shared'
+    }
+    if (entitySpec.match(/^[0-9]+$/)) {
+        return getEntityPath('job:' + entitySpec);
     }
     fail('Unsupported entity type "' + entity.type + '"')
 }
