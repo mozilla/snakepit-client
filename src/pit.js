@@ -927,7 +927,10 @@ program
     .description('lists contents within a job directory')
     .on('--help', function() {
         printIntro()
-        printExample('pit ls 1234 ./job1234')
+        printExample('pit ls job:1234 sub-dir')
+        printExample('pit ls home')
+        printExample('pit ls group:students path/to/some/group/data')
+        printExample('pit ls shared path/to/some/shared/data')
         printLine()
         printLine('"entity" is the entity whose data directory should be accessed')
         printEntityHelp('home', entityUser, entityJob, entityGroup, 'shared')
@@ -959,7 +962,8 @@ program
     .description('copies contents from job directory to local file system')
     .on('--help', function() {
         printIntro()
-        printExample('pit cp 1234 keep/checkpoint-0001.bin ./checkpoint.bin')
+        printExample('pit cp job:1234 keep/checkpoint-0001.bin ./checkpoint.bin')
+        printExample('pit cp home data/corpus.data ./corpus.data')
         printLine()
         printLine('"entity" is the entity whose data directory should be accessed')
         printEntityHelp('home', entityUser, entityJob, entityGroup, 'shared')
