@@ -1,9 +1,11 @@
 #! /usr/bin/env node
 const fs = require('fs')
 const os = require('os')
+const url = require('url')
 const tmp = require('tmp')
 const path = require('path')
 const program = require('commander')
+const WebSocket = require('ws')
 const request = require('request')
 const readlineSync = require('readline-sync')
 const { spawn, execFileSync } = require('child_process')
@@ -908,6 +910,93 @@ program
     })
 
 program
+    .command('exec <jobNumber> -- ...')
+    .usage('[options] <jobNumber> -- cmd arg1 ... argN')
+    .description('execute command on a job\'s worker')
+    .option('-w, --worker <workerIndex>', 'index of the target worker (defaults to 0)')
+    .on('--help', function() {
+        printIntro()
+        printExample('pit exec 1234 -- bash')
+        printExample('pit exec 1234 -- ls -la /')
+        printExample('pit exec -w 1 1234 -- cat /data/rw/pit/src/.compute >1234.compute')
+        printLine()
+    })
+    .action((jobNumber, options) => {
+        let instance = '' + (options.worker || 0)
+        getConnectionSettings(connection => {
+            let endpoint = url.parse(connection.url)
+            if (endpoint.protocol == 'https:') {
+                endpoint.protocol = 'wss'
+            } else {
+                endpoint.protocol = 'ws'
+            }
+            endpoint = url.format(endpoint)
+            let stdin  = process.stdin
+            let stdout = process.stdout
+            let stderr = process.stderr
+
+            let context = JSON.stringify({
+                command: shellCommand,
+                environment: {
+                    TERM: process.env.TERM
+                },
+                interactive: !!stdin.setRawMode,
+                width: stdout.columns,
+                height: stdout.rows
+            })
+            let ws = new WebSocket(endpoint + 'jobs/' + jobNumber + '/instances/' + instance + '/exec?context=' + encodeURIComponent(context), {
+                headers: { 'X-Auth-Token': connection.token },
+                ca: connection.ca
+            })
+
+
+            if (stdin.setRawMode) {
+                stdin.setRawMode(true)
+                stdin.resume()
+            }
+            let buffers = []
+            stdin.on('data', data => {
+                if ( data === '\u0003' ) {
+                    process.exit()
+                }
+                let buffer = Buffer.concat([new Buffer([1]), data])
+                if (buffers) {
+                    buffers.push(buffer)
+                } else {
+                    ws.send(buffer)
+                }
+            })
+
+            stdout.on('resize', () => {
+                let data = JSON.stringify({
+                    "command": "window-resize",
+                    "args": {
+                        "width": "" + stdout.columns,
+                        "height": "" + stdout.rows
+                    }
+                })
+                ws.send(Buffer.concat([new Buffer([0]), Buffer.from(data)]))
+            })
+
+            ws.on('open', () => {
+                for (let buffer of buffers) {
+                    ws.send(buffer)
+                }
+                buffers = undefined
+            })
+            ws.on('message', data => {
+                if (data[0] == 1) {
+                    stdout.write(data.slice(1))
+                } else if (data[0] == 2) {
+                    stderr.write(data.slice(1))
+                }
+            })
+            ws.on('error', err => fail('Problem opening connection to pit: ' + err))
+            ws.on('close', () => process.exit(0))
+        })
+    })
+
+program
     .command('download <jobNumber>')
     .description('downloads job directory as .tar.gz archive')
     .on('--help', function() {
@@ -1115,9 +1204,17 @@ program
         fail("unknown command");
     })
 
-program.parse(process.argv)
+var argv = process.argv
+var shellCommand
+var dashSplitter = argv.indexOf('--')
+if (dashSplitter >= 0) {
+    shellCommand = argv.slice(dashSplitter + 1)
+    argv = argv.slice(0, dashSplitter)
+}
 
-if (!process.argv.slice(2).length) {
+program.parse(argv)
+
+if (!argv.slice(2).length) {
     program.outputHelp();
 }
 
