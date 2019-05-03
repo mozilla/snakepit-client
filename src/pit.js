@@ -7,6 +7,7 @@ const path = require('path')
 const program = require('commander')
 const WebSocket = require('ws')
 const request = require('request')
+const ProgressBar = require('progress')
 const readlineSync = require('readline-sync')
 const { spawn, execFileSync } = require('child_process')
 
@@ -113,13 +114,16 @@ function callPit(verb, resource, content, callback, callOptions) {
         if (callOptions && callOptions.offset) {
             headers['Range'] = 'bytes=' + callOptions.offset + '-'
         }
+        if (callOptions && callOptions.headers) {
+            headers = Object.assign(headers, callOptions.headers)
+        }
         let creqoptions = {
             url: pitUrl + '/' + resource,
             agentOptions: agentOptions,
             headers: headers
         }
         if (content && (typeof content.pipe != 'function')) {
-            creqoptions.content = JSON.stringify(content)
+            creqoptions.body = JSON.stringify(content)
         }
         let creq = request[verb](creqoptions)
         .on('error', err => fail('Unable to reach pit: ' + err.code))
@@ -558,7 +562,8 @@ function getResourcePath (remotePath) {
     return remotePath ? (remotePath.startsWith('/') ? remotePath.slice(1) : remotePath) : ''
 }
 
-function copyContent (entity, remotePath, localPath) {
+function copyContent (entity, remotePath, localPath, options) {
+    options = options || {}
     let entityPath = getEntityPath(entity)
     let resource = getResourcePath(remotePath)
     callPit('get', entityPath + '/simplefs/stats/' + resource, (code, stats) => {
@@ -1091,7 +1096,7 @@ program
         printLine('"remotePath" is the source path within the remote data directory.')
         printLine('"localPath" is the destination path within the local filesystem. If omitted, data will be written to stdout.')
     })
-    .action(copyContent)
+    .action((entity, remotePath, localPath, options) => copyContent(entity, remotePath, localPath, options))
 
 program
     .command('cat <entity> <remotePath>')
@@ -1105,7 +1110,7 @@ program
         printEntityHelp('home', entityUser, entityJob, entityGroup, 'shared')
         printLine('"remotePath" is the source path within the remote data directory.')
     })
-    .action(copyContent)
+    .action((entity, remotePath) => copyContent(entity, remotePath))
 
 program
     .command('push <entity> <remotePath> [localPath]')
@@ -1126,9 +1131,11 @@ program
         let entityPath = getEntityPath(entity)
         let resource = getResourcePath(remotePath)
         let localStats
+        let size = 0
         if (localPath) {
             if (fs.existsSync(localPath)) {
                 localStats = fs.statSync(localPath)
+                size = localStats.size
             } else {
                 fail('Source file not found.')
             }
@@ -1136,34 +1143,26 @@ program
         let transferContent = (offset) => {
             let targetPath = entityPath + '/simplefs/content/' + resource
             if (localStats) {
-                const blockSize = 1024 * 1024
-                let toTransfer = localStats.size - offset
-                let blocks = Math.floor(toTransfer / blockSize) + 1
-                let block = 0
-                let transferBlock = () => {
-                    let blockOffset = offset + block * blockSize
-                    let blockStream = fs.createReadStream(localPath, {
-                        start: blockOffset,
-                        end: blockOffset + blockSize - 1
-                    })
-                    block++
-                    callPit('put', targetPath, blockStream, (code, res) => {
-                        evaluateResponse(code)
-                        if (block < blocks) {
-                            transferBlock()
-                        }
-                    }, { header: { 'Content-Offset': blockOffset } })
-                }
+                let stream = fs.createReadStream(localPath, { start: offset, end: size - 1 })
+                callPit('put', targetPath, stream, (code, res) => {
+                    evaluateResponse(code)
+                }, {
+                    headers: {
+                        'Content-Type': 'application/octet-stream',
+                        'Content-Offset': offset
+                    }
+                })
             } else {
                 callPit('put', targetPath, process.stdin, (code, res) => {
                     evaluateResponse(code)
-                })
+                }, { headers: { 'Content-Type': 'application/octet-stream' } })
             }
         }
-        callPit('get', entityPath + '/simplefs/stats/' + resource, (code, stats) => {
+        let statsPath = entityPath + '/simplefs/stats/' + resource
+        callPit('get', statsPath, (code, stats) => {
             if (code === 404) {
                 console.log('Remote file not existing - creating...')
-                callPit('put', entityPath + '/simplefs/stats/' + resource, (code, res) => {
+                callPit('put', statsPath, { type: 'file' }, (code, res) => {
                     evaluateResponse(code)
                     transferContent(0)
                 })
@@ -1211,7 +1210,7 @@ program
     .action((entity, remotePath) => {
         let entityPath = getEntityPath(entity)
         let resource = getResourcePath(remotePath)
-        callPit('put', entityPath + '/simplefs/stats/' + resource, (code) => {
+        callPit('put', entityPath + '/simplefs/stats/' + resource, { type: 'directory' }, (code) => {
             evaluateResponse(code)
         })
     })
