@@ -221,10 +221,10 @@ function callPit(verb, resource, content, callback, callOptions) {
                 } else {
                     console.log('Found no user of that name.')
                     var register = readlineSync.question(
-                        'Do you want to register this usename (yes|no)? ',
-                        { trueValue: ['yes', 'y'], falseValue: ['no', 'n'] }
+                        'Do you want to register this usename (yN)? ',
+                        { trueValue: ['yes', 'y'] }
                     )
-                    if (register) {
+                    if (register === true) {
                         let user = promptUserInfo()
                         sendRequest('put', userPath, user, function(code, body) {
                             if (code == 200) {
@@ -621,8 +621,7 @@ function copyContent (entity, remotePath, localPath, options) {
                             offset = localStats.size
                         } else {
                             let answer = readlineSync.question('Remote file larger than local one. Continue interrupted download (yN)? ', {
-                                trueValue: ['y', 'yes'],
-                                falseValue: ['n', 'no']
+                                trueValue: ['y', 'yes']
                             })
                             if (answer === true) {
                                 offset = localStats.size
@@ -1245,8 +1244,7 @@ program
                                 transferContent(0)
                             } else {
                                 let answer = readlineSync.question('Remote file smaller than local one. Continue interrupted upload (yN)? ', {
-                                    trueValue: ['y', 'yes'],
-                                    falseValue: ['n', 'no']
+                                    trueValue: ['y', 'yes']
                                 })
                                 if (answer === true) {
                                     transferContent(stats.size)
