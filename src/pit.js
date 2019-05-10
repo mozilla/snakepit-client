@@ -998,7 +998,7 @@ program
         if (!clusterRequest) {
             fail('No resources requested from cluster. Please provide them either through command line or through a "' + REQUEST_FILE + '" file in your project root.')
         }
-        if (title.length > 20) {
+        if (title.length > 40) {
             fail('Job title too long (20 characters max)')
         }
         callPit('post', 'jobs', {
