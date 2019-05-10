@@ -40,10 +40,12 @@
     "hoek": ">=6.1.2",
     "matcher": "^1.1.1",
     "mime": ">=2.4.0",
+    "multiplex": "^6.7.0",
     "progress": "^2.0.3",
     "readline-sync": "^1.4.9",
     "request": "^2.88.0",
     "tmp": "^0.0.33",
+    "websocket-stream": "^5.5.0",
     "ws": "^6.2.0"
   },
   "optionalDependencies": {

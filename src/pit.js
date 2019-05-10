@@ -1,14 +1,17 @@
 #! /usr/bin/env node
 const fs = require('fs')
 const os = require('os')
+const net = require('net')
 const url = require('url')
 const tmp = require('tmp')
 const path = require('path')
-const program = require('commander')
 const WebSocket = require('ws')
+const websocket = require('websocket-stream')
 const request = require('request')
-const ProgressBar = require('progress')
 const filesize = require('filesize')
+const program = require('commander')
+const multiplex = require('multiplex')
+const ProgressBar = require('progress')
 const readlineSync = require('readline-sync')
 const { spawn, execFileSync } = require('child_process')
 
@@ -399,6 +402,10 @@ function printEntityHelp() {
     printLine('Accepted values for "entity": ' + Array.prototype.slice.call(arguments).join(', ') + '.')
 }
 
+function printJobNumberHelp() {
+    printLine('"jobNumber": Number of the targeted job')
+}
+
 function printPropertyHelp() {
     printLine('Properties are pairs of property-name and value of the form "property=value".')
 }
@@ -662,6 +669,16 @@ function copyContent (entity, remotePath, localPath, options) {
             fail('Command only supports file transfers.')
         }
     })
+}
+
+function toWebSocketUrl(httpurl) {
+    let endpoint = url.parse(httpurl)
+    if (endpoint.protocol == 'https:') {
+        endpoint.protocol = 'wss'
+    } else {
+        endpoint.protocol = 'ws'
+    }
+    return url.format(endpoint)
 }
 
 program
@@ -931,6 +948,8 @@ program
     .on('--help', function() {
         printIntro()
         printExample('pit stop 1234')
+        printLine()
+        printJobNumberHelp()
     })
     .action(function(jobNumber) {
         callPit('post', 'jobs/' + jobNumber + '/stop', evaluateResponse)
@@ -1011,15 +1030,13 @@ program
 program
     .command('log <jobNumber>')
     .description('show job\'s log')
-    .option('-f, --follow', 'continuously shows further log output if the job is still running')
     .on('--help', function() {
         printIntro()
-        printExample('pit log -f')
+        printExample('pit log 1234')
         printLine()
+        printJobNumberHelp()
     })
-    .action((jobNumber, options) => {
-        showLog(jobNumber)
-    })
+    .action(jobNumber => showLog(jobNumber))
 
 program
     .command('exec <jobNumber> -- ...')
@@ -1032,17 +1049,12 @@ program
         printExample('pit exec 1234 -- ls -la /')
         printExample('pit exec -w 1 1234 -- cat /data/rw/pit/src/.compute >1234.compute')
         printLine()
+        printJobNumberHelp()
     })
     .action((jobNumber, options) => {
         let instance = '' + (options.worker || 0)
         getConnectionSettings(connection => {
-            let endpoint = url.parse(connection.url)
-            if (endpoint.protocol == 'https:') {
-                endpoint.protocol = 'wss'
-            } else {
-                endpoint.protocol = 'ws'
-            }
-            endpoint = url.format(endpoint)
+            let endpoint = toWebSocketUrl(connection.url)
             let stdin  = process.stdin
             let stdout = process.stdout
             let stderr = process.stderr
@@ -1105,6 +1117,59 @@ program
             })
             ws.on('error', err => fail('Problem opening connection to pit: ' + err))
             ws.on('close', () => process.exit(0))
+        })
+    })
+
+program
+    .command('forward <jobNumber> [ports...]')
+    .description('forward ports of a job\'s worker to localhost')
+    .option('-w, --worker <workerIndex>', 'index of the target worker (defaults to 0)')
+    .on('--help', function() {
+        printIntro()
+        printExample('pit forward 1234 8080:80 7022:22')
+        printExample('pit forward 1234 8080')
+        printLine()
+        printJobNumberHelp()
+        printLine('"ports": All the ports to forward. Each port has to be provided either as one number (local and remote port being the same) or as a colon-separated pair where the first one is the local and the second one the remote counter-part.')
+    })
+    .action((jobNumber, ports, options) => {
+        let instance = '' + (options.worker || 0)
+        let portPairs = {}
+        for (let port of ports) {
+            let [localPort, remotePort] = port.split(':').map(x => Number(x))
+            remotePort = remotePort || localPort
+            if (!localPort) {
+                fail('Wrong port pair format')
+            }
+            portPairs[localPort] = remotePort
+        }
+        getConnectionSettings(connection => {
+            let endpoint = toWebSocketUrl(connection.url)
+            let ws = websocket(endpoint + 'jobs/' + jobNumber + '/instances/' + instance + '/forward', {
+                headers: { 'X-Auth-Token': connection.token },
+                ca: connection.ca
+            })
+            let mp = multiplex()
+            mp.pipe(ws)
+            ws.pipe(mp)
+            let idc = 0
+            let onConnection = socket => {
+                let remotePort = portPairs[socket.localPort]
+                let id = idc++
+                let stream = mp.createStream(id + '-' + remotePort)
+                socket.pipe(stream)
+                stream.pipe(socket)
+                stream.on('error', err => { console.error('Remote', err.message || 'problem'); socket.end() })
+            }
+            for (let localPort of Object.keys(portPairs)) {
+                let remotePort = portPairs[localPort]
+                console.log('Forwarding port ' + remotePort + ' of worker ' + instance + ' to port ' + localPort + ' on localhost...')
+                let server = net.createServer(onConnection)
+                server.listen(localPort, 'localhost')
+            }
+            console.log('Hit Ctrl-C to stop forwarding.')
+            mp.on('error', err => fail('Problem with remote end - Closing'))
+            ws.on('error', err => fail('Problem opening connection to pit: ' + err))
         })
     })
 
