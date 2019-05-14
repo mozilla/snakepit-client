@@ -23,6 +23,7 @@ const githubGitPrefix = 'git@github.com:'
 const githubHttpsPrefix = 'https://github.com/'
 
 var globalunmount
+var debugHttp = false
 
 function fail(message) {
     console.error('Command failed: ' + message)
@@ -126,12 +127,19 @@ function callPit(verb, resource, content, callback, callOptions) {
             agentOptions: agentOptions,
             headers: headers
         }
+        if (debugHttp) {
+            console.log('SENDING', verb, creqoptions.url)
+        }
         if (content && (typeof content.pipe != 'function')) {
             creqoptions.body = JSON.stringify(content)
+            if (debugHttp) {
+                console.log('- BODY', creqoptions.body)
+            }
         }
         let creq = request[verb](creqoptions)
         .on('error', err => fail('Unable to reach pit: ' + err.code))
         .on('response', res => {
+            console.log('RECEIVING CODE', res.statusCode)
             if (res.statusCode === 401) {
                 var password = readlineSync.question('Please enter password: ', { hideEchoBack: true })
                 authenticate(
@@ -140,6 +148,9 @@ function callPit(verb, resource, content, callback, callOptions) {
                     () => sendRequest(verb, resource, content, callback, callOptions)
                 )
             } else if (callOptions && callOptions.asStream) {
+                if (debugHttp) {
+                    console.log('- STREAM')
+                }
                 callback(res.statusCode, creq)
             } else {
                 let chunks = []
@@ -150,6 +161,9 @@ function callPit(verb, resource, content, callback, callOptions) {
                     if (contentType && contentType.startsWith('application/json')) {
                         try {
                             body = JSON.parse(body.toString())
+                            if (debugHttp) {
+                                console.log('- BODY', body)
+                            }
                         } catch (ex) {
                             fail('Problem parsing pit response.')
                         }
@@ -233,7 +247,7 @@ function callPit(verb, resource, content, callback, callOptions) {
                             if (code == 200) {
                                 authenticate(username, user.password, sendCommand)
                             } else {
-                                console.error('Unable to register user.')
+                                console.error((body && body.message) || 'Unable to register user')
                                 process.exit(1)
                             }
                         })
@@ -299,7 +313,7 @@ const entityDescriptors = {
         'email': 'E-Mail address',
         'groups': (o, v) => v && ['Groups', v.join(' ')],
         'autoshare': (o, v) => v && ['Auto share', v.join(' ')],
-        'admin': 'Is administrator'
+        'admin': (o, v) => ['Is administrator', v ? 'yes' : 'no']
     },
     'node': {
         'id': 'Node name',
@@ -427,8 +441,8 @@ function printExample(line) {
 }
 
 function splitPair(value, separator, ...names) {
-    var obj = {}
-    var parts = value.split(separator)
+    let obj = {}
+    let parts = value.split(separator)
     for (let index in parts) {
         obj[names[index]] = parts[index]
     }
@@ -457,6 +471,8 @@ function parseEntityProperties(entity, properties) {
                 assignment.value = assignment.value.split(',').map(v => Number(v))
             } else if (assignment.property == 'autoshare') {
                 assignment.value = assignment.value.split(',')
+            } else if (assignment.property == 'admin') {
+                assignment.value = assignment.value === 'yes' || assignment.value === 'y' || assignment.value === 'true'
             }
             obj[assignment.property] = assignment.value
         })
@@ -683,6 +699,7 @@ function toWebSocketUrl(httpurl) {
 
 program
     .version('0.0.1')
+    .option('-d, --debug', 'shows JSON messages sent from and to server', () => debugHttp = true)
 
 program
     .command('add <entity> [properties...]')
@@ -748,10 +765,8 @@ program
     .on('--help', function() {
         printIntro()
         printExample('pit set user:paul email=x@y.z fullname="Paul Smith"')
-        printExample('pit set node:machine1 endpoint=192.168.2.1')
         printExample('pit set alias:gtx1070 name="GeForce GTX 1070"')
         printExample('pit set group:students title="Different title"')
-        printExample('pit set job:123 autoshare=students,professors')
         printLine()
         printEntityHelp(entityUser, entityNode, entityAlias, entityGroup, entityJob)
         printPropertyHelp()
@@ -761,12 +776,33 @@ program
     })
     .action(function(entity, assignments) {
         entity = parseEntity(entity)
-        if(entity.type == 'user' || entity.type == 'node' || entity.type == 'alias' || entity.type == 'group' || entity.type == 'job') {
+        if(entity.type == 'user' || entity.type == 'alias' || entity.type == 'group') {
             let obj = parseEntityProperties(entity, assignments)
-            callPit('put', entity.plural + '/' + entity.id, obj, evaluateResponse)
+            if (entity.type == 'user' && !obj.verification) {
+                obj.verification = readlineSync.question('Please enter password: ', { hideEchoBack: true })
+            }
+            callPit('post', entity.plural + '/' + entity.id, obj, evaluateResponse)
         } else {
             fail('Unsupported entity type "' + entity.type + '"')
         }
+    })
+
+program
+    .command('passwd [username]')
+    .description('set new password')
+    .on('--help', function() {
+        printIntro()
+        printExample('pit passwd')
+        printExample('pit passwd paul')
+        printLine()
+        printLine('"username" is the name of the user, whose password should be changed. If omitted, the user\'s own password should be changed.')
+    })
+    .action(function(username) {
+        username = username || '~'
+        let obj = {}
+        obj.verification = readlineSync.question('Own password for verification: ', { hideEchoBack: true })
+        obj.password = readlineSync.questionNewPassword('New password: ')
+        callPit('post', 'users/' + username, obj, evaluateResponse)
     })
 
 program
