@@ -24,6 +24,7 @@ const githubHttpsPrefix = 'https://github.com/'
 
 var globalunmount
 var debugHttp = false
+var userPassword
 
 function fail(message) {
     console.error('Command failed: ' + message)
@@ -69,6 +70,13 @@ function promptGroupInfo(group) {
         group.title = readlineSync.question('Group title: ')
     }
     return group
+}
+
+function getUserPassword() {
+    if (typeof userPassword !== 'string') {
+        userPassword = readlineSync.question('Please enter password: ', { hideEchoBack: true })
+    }
+    return userPassword
 }
 
 function callPit(verb, resource, content, callback, callOptions) {
@@ -139,12 +147,13 @@ function callPit(verb, resource, content, callback, callOptions) {
         let creq = request[verb](creqoptions)
         .on('error', err => fail('Unable to reach pit: ' + err.code))
         .on('response', res => {
-            console.log('RECEIVING CODE', res.statusCode)
+            if (debugHttp) {
+                console.log('RECEIVING CODE', res.statusCode)
+            }
             if (res.statusCode === 401) {
-                var password = readlineSync.question('Please enter password: ', { hideEchoBack: true })
                 authenticate(
                     username,
-                    password,
+                    getUserPassword(),
                     () => sendRequest(verb, resource, content, callback, callOptions)
                 )
             } else if (callOptions && callOptions.asStream) {
@@ -229,16 +238,11 @@ function callPit(verb, resource, content, callback, callOptions) {
             var userPath = 'users/' + username
             sendRequest('get', userPath + '/exists', function(code, body) {
                 if (code == 200) {
-                    console.log('The user already exists.')
-                    var password = readlineSync.question(
-                        'Please enter password (or Ctrl-C to abort): ',
-                        { hideEchoBack: true }
-                    )
-                    authenticate(username, password, sendCommand)
+                    authenticate(username, getUserPassword(), sendCommand)
                 } else {
                     console.log('Found no user of that name.')
                     var register = readlineSync.question(
-                        'Do you want to register this usename (yN)? ',
+                        'Do you want to register a new user with this name (yN)? ',
                         { trueValue: ['yes', 'y'] }
                     )
                     if (register === true) {
@@ -470,7 +474,7 @@ function parseEntityProperties(entity, properties) {
             if (assignment.property == 'cvd') {
                 assignment.value = assignment.value.split(',').map(v => Number(v))
             } else if (assignment.property == 'autoshare') {
-                assignment.value = assignment.value.split(',')
+                assignment.value = assignment.value.split(',').filter(x => String(x).length !== 0)
             } else if (assignment.property == 'admin') {
                 assignment.value = assignment.value === 'yes' || assignment.value === 'y' || assignment.value === 'true'
             }
@@ -779,7 +783,7 @@ program
         if(entity.type == 'user' || entity.type == 'alias' || entity.type == 'group') {
             let obj = parseEntityProperties(entity, assignments)
             if (entity.type == 'user' && !obj.verification) {
-                obj.verification = readlineSync.question('Please enter password: ', { hideEchoBack: true })
+                obj.verification = getUserPassword()
             }
             callPit('post', entity.plural + '/' + entity.id, obj, evaluateResponse)
         } else {
