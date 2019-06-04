@@ -1,10 +1,13 @@
 #! /usr/bin/env node
-const fs = require('fs')
+const fs = require('fs-extra')
 const os = require('os')
 const net = require('net')
 const url = require('url')
 const tmp = require('tmp')
 const path = require('path')
+const zlib = require('zlib')
+const tar = require('tar-fs')
+const ignore = require('ignore')
 const WebSocket = require('ws')
 const websocket = require('websocket-stream')
 const request = require('request')
@@ -12,12 +15,15 @@ const filesize = require('filesize')
 const program = require('commander')
 const multiplex = require('multiplex')
 const ProgressBar = require('progress')
+const randomstring = require("randomstring")
 const readlineSync = require('readline-sync')
 const { spawn, execFileSync } = require('child_process')
 
 const USER_FILE = '.pituser.txt'
 const CONNECT_FILE = '.pitconnect.txt'
 const REQUEST_FILE = '.pitrequest.txt'
+const JOB_ARCHIVE = '.job-upload.tar.gz'
+const JOB_COMMAND = '.job-upload.json'
 
 const githubGitPrefix = 'git@github.com:'
 const githubHttpsPrefix = 'https://github.com/'
@@ -199,7 +205,8 @@ function callPit(verb, resource, content, callback, callOptions) {
             callback({
                 url: pitUrl,
                 token: token,
-                ca: agentOptions && agentOptions.ca
+                ca: agentOptions && agentOptions.ca,
+                user: username
             })
         } else {
             sendRequest(verb, resource, content, callback, callOptions)
@@ -600,7 +607,7 @@ function createProgressBar (caption, offset, size) {
     return bar
 }
 
-function copyContent (entity, remotePath, localPath, options) {
+function pullContent (entity, remotePath, localPath, options) {
     options = options || {}
     let entityPath = getEntityPath(entity)
     let resource = getResourcePath(remotePath)
@@ -621,8 +628,8 @@ function copyContent (entity, remotePath, localPath, options) {
                     } else if (localStats.isFile()) {
                         if (options.force) {
                             console.error('Target file existing: Re-downloading...')
-                        } else if (localStats.size >= stats.size) {
-                            fail('Local file already existing. Remove it or use force option to overwrite.')
+                        } else if (localStats.size > stats.size) {
+                            fail('Larger local file already existing. Remove it or use force option to overwrite.')
                         } else if (options.continue) {
                             console.error('Local file already existing and smaller than remote file: Continuing download...')
                             offset = localStats.size
@@ -649,20 +656,27 @@ function copyContent (entity, remotePath, localPath, options) {
                         fail('Target directory not existing.')
                     }
                 }
-                callPit('get', entityPath + '/simplefs/content/' + resource, (code, res) => {
-                    evaluateResponse(code)
-                    let bar = createProgressBar('downloading', offset, stats.size)
-                    res.on('data', buf => bar.tick(buf.length))
-                    let target = fs.createWriteStream(localPath, {flags: offset >  0 ? 'a' : 'w'})
-                    res.pipe(target)
-                }, {
-                    asStream: true,
-                    headers: { 'Range': 'bytes=' + offset + '-' }
-                })
+                if (localStats.size === stats.size && !options.force) {
+                    console.error('Local file of same size already existing: Skipped download.')
+                    options.callback && options.callback()
+                } else {
+                    callPit('get', entityPath + '/simplefs/content/' + resource, (code, res) => {
+                        evaluateResponse(code)
+                        let bar = createProgressBar('downloading', offset, stats.size)
+                        res.on('data', buf => bar.tick(buf.length))
+                        let target = fs.createWriteStream(localPath, {flags: offset >  0 ? 'a' : 'w'})
+                        res.pipe(target)
+                        options.callback && target.on('finish', options.callback)
+                    }, {
+                        asStream: true,
+                        headers: { 'Range': 'bytes=' + offset + '-' }
+                    })
+                }
             } else {
                 callPit('get', entityPath + '/simplefs/content/' + resource, (code, res) => {
                     evaluateResponse(code)
                     res.pipe(process.stdout)
+                    options.callback && process.stdout.on('finish', options.callback)
                 }, { asStream: true })
             }
         } else {
@@ -671,7 +685,104 @@ function copyContent (entity, remotePath, localPath, options) {
     })
 }
 
-function toWebSocketUrl(httpurl) {
+function pushContent (entity, remotePath, localPath, options) {
+    options = options || {}
+    let entityPath = getEntityPath(entity)
+    let resource = getResourcePath(remotePath)
+    let localStats
+    let size = 0
+    if (localPath) {
+        if (fs.existsSync(localPath)) {
+            localStats = fs.statSync(localPath)
+            size = localStats.size
+        } else {
+            fail('Source file not found.')
+        }
+    }
+    let transferContent = (offset) => {
+        let targetPath = entityPath + '/simplefs/content/' + resource
+        if (localStats) {
+            let stream = fs.createReadStream(localPath, { start: offset })
+            let bar = createProgressBar('uploading', offset, size)
+            stream.on('data', buf => bar.tick(buf.length))
+            callPit('put', targetPath, stream, (code, res) => {
+                evaluateResponse(code)
+                options.callback && options.callback()
+            }, {
+                headers: {
+                    'Content-Type': 'application/octet-stream',
+                    'Content-Offset': offset
+                }
+            })
+        } else {
+            callPit('put', targetPath, process.stdin, (code, res) => {
+                evaluateResponse(code)
+                options.callback && options.callback()
+            }, { headers: { 'Content-Type': 'application/octet-stream' } })
+        }
+    }
+    let statsPath = entityPath + '/simplefs/stats/' + resource
+    callPit('get', statsPath, (code, stats) => {
+        if (code === 404) {
+            console.error('Remote file not existing - creating...')
+            callPit('put', statsPath, { type: 'file' }, (code, res) => {
+                evaluateResponse(code)
+                transferContent(0)
+            })
+        } else {
+            evaluateResponse(code)
+            if (stats.isFile) {
+                if (stats.size === size) {
+                    if (options.force) {
+                        console.error('Remote file of same size as the local one - re-uploading...')
+                        transferContent(0)
+                    } else {
+                        options.callback && options.callback()
+                    }
+                } else if (stats.size < size) {
+                    if (options.continue) {
+                        console.error('Remote file smaller than local one - continuing upload...')
+                        transferContent(stats.size)
+                    } else {
+                        if (options.force) {
+                            console.error('Remote file existing - re-uploading...')
+                            transferContent(0)
+                        } else {
+                            let answer = readlineSync.question('Remote file smaller than local one. Continue interrupted upload (yN)? ', {
+                                trueValue: ['y', 'yes']
+                            })
+                            if (answer === true) {
+                                transferContent(stats.size)
+                            } else {
+                                fail('Aborted')
+                            }
+                        }
+                    }
+                } else {
+                    if (options.force) {
+                        console.error('Remote file is larger than local one - re-uploading...')
+                        transferContent(0)
+                    } else {
+                        fail('Remote file is larger than local one.')
+                    }
+                }
+            } else {
+                fail('Target path is existing, but not a file.')
+            }
+        }
+    })
+}
+
+function deleteFromEntity (entity, remotePath, callback) {
+    let entityPath = getEntityPath(entity)
+    let resource = getResourcePath(remotePath)
+    callPit('delete', entityPath + '/simplefs/stats/' + resource, (code) => {
+        evaluateResponse(code)
+        callback && callback()
+    })
+}
+
+function toWebSocketUrl (httpurl) {
     let endpoint = url.parse(httpurl)
     if (endpoint.protocol == 'https:') {
         endpoint.protocol = 'wss'
@@ -960,6 +1071,7 @@ program
     .alias('put')
     .description('enqueues current directory as new job')
     .option('-p, --private', 'prevents automatic sharing of this job')
+    .option('-a, --archive', 'archive based job upload of current directory')
     .option('-c, --continue <jobNumber>', 'continues job with provided number by copying its "keep" directory over to the new job')
     .option('-d, --direct <commands>', 'directly executes provided commands through bash instead of loading .compute file')
     .option('-l, --log', 'waits for and prints job\'s log output')
@@ -976,53 +1088,135 @@ program
         printLine('You can also provide a "' + REQUEST_FILE + '" file with the same content in your project root as default value.')
     })
     .action(function(title, clusterRequest, options) {
-        var tracking = tryCommand('git', 'rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}') || 'origin/master'
-        var ob = tracking.split('/')
-        if (ob.length != 2) {
-            fail('Problem getting tracked git remote and branch')
-        }
-        var origin = ob[0]
-        var branch = ob[1]
-        var hash = tryCommand('git', 'rev-parse', tracking)
-        if (!hash) {
-            fail('Problem getting remote branch "' + tracking + '"')
-        }
-        var originUrl = runCommand('git', 'remote', 'get-url', '--push', origin)
-        if (originUrl.startsWith(githubGitPrefix)) {
-            originUrl = githubHttpsPrefix + originUrl.substr(githubGitPrefix.length)
-        }
-        var diff = runCommand('git', 'diff', '--no-prefix', tracking)
-        if (!clusterRequest && fs.existsSync(REQUEST_FILE)) {
-            clusterRequest = fs.readFileSync(REQUEST_FILE, 'utf-8').trim()
-        }
-        if (!clusterRequest) {
-            fail('No resources requested from cluster. Please provide them either through command line or through a "' + REQUEST_FILE + '" file in your project root.')
-        }
-        if (title.length > 40) {
-            fail('Job title too long (20 characters max)')
-        }
-        callPit('post', 'jobs', {
-            origin: originUrl,
-            hash: hash,
-            diff: diff,
-            clusterRequest: clusterRequest,
-            description: title,
-            private: options.private,
-            continueJob: options.continue,
-            script: options.direct
-        }, (code, body) => {
-            if (code == 200) {
-                console.log('Job number: ' + body.id)
-                console.log('Remote:     ' + origin + ' <' + originUrl.replace(/\/\/.*\@/g, '//') + '>')
-                console.log('Hash:       ' + hash)
-                console.log('Diff LoC:   ' + diff.split('\n').length)
-                console.log('Resources:  "' + clusterRequest + '"')
-                if (options.log) {
-                    console.log()
-                    showLog(body.id)
+        getConnectionSettings(connection => {
+            if (!clusterRequest && fs.existsSync(REQUEST_FILE)) {
+                clusterRequest = fs.readFileSync(REQUEST_FILE, 'utf-8').trim()
+            }
+            if (!clusterRequest) {
+                fail('No resources requested from cluster. Please provide them either through command line or through a "' + REQUEST_FILE + '" file in your project root.')
+            }
+            if (title.length > 40) {
+                fail('Job title too long (20 characters max)')
+            }
+
+            let user = 'user:' + connection.user
+
+            let job = {
+                clusterRequest: clusterRequest,
+                description:    title,
+                private:        options.private,
+                continueJob:    options.continue,
+                script:         options.direct
+            }
+
+            let sendJob = () => {
+                callPit('post', 'jobs', job, (code, body) => {
+                    if (code == 200) {
+                        console.log('Job scheduled: ' + body.id)
+                        if (job.archive) {
+                            deleteFromEntity(user, job.archive)
+                            fs.unlink(JOB_ARCHIVE)
+                            fs.unlink(JOB_COMMAND)
+                        }
+                        if (options.log) {
+                            console.log()
+                            showLog(body.id)
+                        }
+                    } else {
+                        evaluateResponse(code, body)
+                    }
+                })
+            }
+
+            let printJob = pj => {
+                                  console.log('- Title:            ' + pj.description)
+                                  console.log('- Resource request: ' + pj.clusterRequest)
+                                  console.log('- Private:          ' + (pj.private ? 'Yes' : 'No'))
+                pj.continueJob && console.log('- Continues job:    ' + pj.continueJob)
+                pj.script      && console.log('- Command:          ' + pj.script)
+                pj.origin      && console.log('- Remote:           ' + pj.origin.replace(/\/\/.*@/g, '//'))
+                pj.hash        && console.log('- Hash:             ' + pj.hash)
+                pj.diff        && console.log('- Diff:             ' + pj.diff.split('\n').length + ' LoC')
+            }
+
+            if (!options.archive && fs.existsSync('.git')) {
+                var tracking = tryCommand('git', 'rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}') || 'origin/master'
+                var ob = tracking.split('/')
+                if (ob.length != 2) {
+                    fail('Problem getting tracked git remote and branch')
                 }
+                var origin = ob[0]
+                var branch = ob[1]
+                var hash = tryCommand('git', 'rev-parse', tracking)
+                if (!hash) {
+                    fail('Problem getting remote branch "' + tracking + '"')
+                }
+                var originUrl = runCommand('git', 'remote', 'get-url', '--push', origin)
+                if (originUrl.startsWith(githubGitPrefix)) {
+                    originUrl = githubHttpsPrefix + originUrl.substr(githubGitPrefix.length)
+                }
+                var diff = runCommand('git', 'diff', '--no-prefix', tracking)
+                job = Object.assign(job, {
+                    origin: originUrl,
+                    hash:   hash,
+                    diff:   diff,
+                })
+                printJob(job)
+                sendJob()
             } else {
-                evaluateResponse(code, body)
+                console.log('Scheduling job an archive of current directory')
+                console.log()
+                if (fs.existsSync(JOB_ARCHIVE)) {
+                    if (fs.existsSync(JOB_COMMAND)) {
+                        let incompleteJob = JSON.parse(fs.readFileSync(JOB_COMMAND))
+                        console.log('Found incomplete job upload in current directory (.job-upload*):')
+                        printJob(incompleteJob)
+                        let answer = readlineSync.question('Continue incomplete upload (y) or delete it and proceed scheduling a new job (N)? ', {
+                            trueValue: ['y', 'yes']
+                        })
+                        if (answer) {
+                            console.log('Continuing interrupted job upload...')
+                            job = incompleteJob
+                        } else {
+                            console.log('Removing archive of interrupted job upload...')
+                            fs.unlinkSync(JOB_ARCHIVE)
+                        }
+                    } else {
+                        fail('Found job upload archive ' + JOB_ARCHIVE + ' without meta data. Please delete or move before continuing.')
+                    }
+                }
+                if (!fs.existsSync(JOB_ARCHIVE)) {
+                    job.archive = '.upload-' + randomstring.generate() + '.tar.gz'
+                    fs.writeFileSync(JOB_COMMAND, JSON.stringify(job))
+                    let tmpFile = tmp.tmpNameSync()
+                    let archive = fs.createWriteStream(tmpFile)
+                    const ig = ignore()
+                    ig.add('.git')
+                    ig.add('.pituser.txt')
+                    if (fs.existsSync('.gitignore')) {
+                        ig.add(fs.readFileSync('.gitignore').toString())
+                    }
+                    if (fs.existsSync('.pitignore')) {
+                        ig.add(fs.readFileSync('.pitignore').toString())
+                    }
+                    tar .pack('.', {
+                            ignore: name => {
+                                if (ig.ignores(name)) {
+                                    console.log('Ignoring', name)
+                                    return true
+                                }
+                                console.log('Archiving ' + name + '...')
+                            }
+                        })
+                        .pipe(zlib.Gzip())
+                        .pipe(archive)
+                    archive.on('finish', () => {
+                        fs.renameSync(tmpFile, JOB_ARCHIVE)
+                        pushContent(user, job.archive, JOB_ARCHIVE, { continue: true, callback: sendJob })
+                    })
+                } else {
+                    pushContent(user, job.archive, JOB_ARCHIVE, { continue: true, callback: sendJob })
+                }
             }
         })
     })
@@ -1224,7 +1418,7 @@ program
         printLine('"remotePath" is the source path within the remote data directory.')
         printLine('"localPath" is the destination path within the local filesystem. If omitted, data will be written to stdout.')
     })
-    .action((entity, remotePath, localPath, options) => copyContent(entity, remotePath, localPath, options))
+    .action((entity, remotePath, localPath, options) => pullContent(entity, remotePath, localPath, options))
 
 program
     .command('cat <entity> <remotePath>')
@@ -1238,7 +1432,7 @@ program
         printEntityHelp('home', entityUser, entityJob, entityGroup, 'shared')
         printLine('"remotePath" is the source path within the remote data directory.')
     })
-    .action((entity, remotePath) => copyContent(entity, remotePath))
+    .action((entity, remotePath) => pullContent(entity, remotePath))
 
 program
     .command('push <entity> <remotePath> [localPath]')
@@ -1255,83 +1449,7 @@ program
         printLine('"remotePath" is the target path within the remote entity\'s directory.')
         printLine('"localPath" is the path to a source file within the local filesystem. If omitted, data will be read from stdin.')
     })
-    .action((entity, remotePath, localPath, options) => {
-        let entityPath = getEntityPath(entity)
-        let resource = getResourcePath(remotePath)
-        let localStats
-        let size = 0
-        if (localPath) {
-            if (fs.existsSync(localPath)) {
-                localStats = fs.statSync(localPath)
-                size = localStats.size
-            } else {
-                fail('Source file not found.')
-            }
-        }
-        let transferContent = (offset) => {
-            let targetPath = entityPath + '/simplefs/content/' + resource
-            if (localStats) {
-                let stream = fs.createReadStream(localPath, { start: offset })
-                let bar = createProgressBar('uploading', offset, size)
-                stream.on('data', buf => bar.tick(buf.length))
-                callPit('put', targetPath, stream, (code, res) => {
-                    evaluateResponse(code)
-                }, {
-                    headers: {
-                        'Content-Type': 'application/octet-stream',
-                        'Content-Offset': offset
-                    }
-                })
-            } else {
-                callPit('put', targetPath, process.stdin, (code, res) => {
-                    evaluateResponse(code)
-                }, { headers: { 'Content-Type': 'application/octet-stream' } })
-            }
-        }
-        let statsPath = entityPath + '/simplefs/stats/' + resource
-        callPit('get', statsPath, (code, stats) => {
-            if (code === 404) {
-                console.error('Remote file not existing - creating...')
-                callPit('put', statsPath, { type: 'file' }, (code, res) => {
-                    evaluateResponse(code)
-                    transferContent(0)
-                })
-            } else {
-                evaluateResponse(code)
-                if (stats.isFile) {
-                    if (stats.size < size) {
-                        if (options.continue) {
-                            console.error('Remote file smaller than local one - continuing upload...')
-                            transferContent(stats.size)
-                        } else {
-                            if (options.force) {
-                                console.error('Remote file existing - re-uploading...')
-                                transferContent(0)
-                            } else {
-                                let answer = readlineSync.question('Remote file smaller than local one. Continue interrupted upload (yN)? ', {
-                                    trueValue: ['y', 'yes']
-                                })
-                                if (answer === true) {
-                                    transferContent(stats.size)
-                                } else {
-                                    fail('Aborted')
-                                }
-                            }
-                        }
-                    } else {
-                        if (options.force) {
-                            console.error('Remote file is of same size or larger than local one - re-uploading...')
-                            transferContent(0)
-                        } else {
-                            fail('Remote file is of same size or larger than local one.')
-                        }
-                    }
-                } else {
-                    fail('Target path is existing, but not a file.')
-                }
-            }
-        })
-    })
+    .action((entity, remotePath, localPath, options) => pushContent(entity, remotePath, localPath, options))
 
 program
     .command('mkdir <entity> <remotePath>')
@@ -1364,13 +1482,7 @@ program
         printEntityHelp('home', entityUser, entityGroup)
         printLine('"remotePath" is the target path within the remote entity\'s tree.')
     })
-    .action((entity, remotePath) => {
-        let entityPath = getEntityPath(entity)
-        let resource = getResourcePath(remotePath)
-        callPit('delete', entityPath + '/simplefs/stats/' + resource, (code) => {
-            evaluateResponse(code)
-        })
-    })
+    .action((entity, remotePath) => deleteFromEntity(entity, remotePath))
 
 program
     .command('mount <entity> [mountpoint]')
