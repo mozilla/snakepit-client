@@ -1247,6 +1247,8 @@ program
                     const ig = ignore()
                     ig.add('.git')
                     ig.add('.pituser.txt')
+                    ig.add(JOB_ARCHIVE)
+                    ig.add(JOB_COMMAND)
                     if (fs.existsSync('.gitignore')) {
                         ig.add(fs.readFileSync('.gitignore').toString())
                     }
