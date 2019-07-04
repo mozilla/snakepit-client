@@ -636,8 +636,8 @@ function pullContent (entity, remotePath, localPath, options) {
         if (stats.isFile) {
             if (localPath) {
                 let offset = 0
+                let localStats = fs.statSync(localPath)
                 if (fs.existsSync(localPath)) {
-                    let localStats = fs.statSync(localPath)
                     if (localStats.isDirectory()) {
                         let rname = remotePath.substring(remotePath.lastIndexOf('/') + 1)
                         if (rname.length > 0) {
