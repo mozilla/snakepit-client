@@ -1333,7 +1333,7 @@ program
                 if ( data === '\u0003' ) {
                     process.exit()
                 }
-                let buffer = Buffer.concat([new Buffer([1]), data])
+                let buffer = Buffer.concat([new Buffer.from([1]), data])
                 if (buffers) {
                     buffers.push(buffer)
                 } else {
@@ -1539,79 +1539,6 @@ program
         printLine('"remotePath" is the target path within the remote entity\'s tree.')
     })
     .action((entity, remotePath) => deleteFromEntity(entity, remotePath))
-
-program
-    .command('mount <entity> [mountpoint]')
-    .description('mounts the data directory of an entity to a local mountpoint')
-    .option('--shell', 'starts a shell in the mounted directory. The mount will be automatically unmounted upon shell exit.')
-    .on('--help', function() {
-        printIntro()
-        printExample('pit mount home')
-        printExample('pit mount user:anna ~/annahome')
-        printExample('pit mount --shell job:1234')
-        printExample('pit mount group:students ./students')
-        printExample('pit mount shared ./shared')
-        printLine()
-        printLine('"entity" is the entity whose data directory will be mounted')
-        printEntityHelp('home', entityUser, entityJob, entityGroup, 'shared')
-        printLine('"mountpoint" is the directory where the data directory will be mounted onto. Has to be empty. If omitted, a temporary directory will be used as mountpoint and automatically deleted on unmounting.')
-        printLine('Home and group directories are write-enabled, all others are read-only.')
-    })
-    .action((entity, mountpoint, options) => {
-        let httpfs
-        try {
-            httpfs = require('./httpfs.js')
-        } catch (ex) {
-            fail(
-                'For mounting, package "fuse" has to be installed.\n' +
-                'Most likely it has been skipped due to missing dependencies.\n' +
-                'Please consult the following page for system specific requirements:\n' +
-                '\thttps://github.com/mafintosh/fuse-bindings#requirements\n' +
-                'Once fulfilled, you can either re-install snakepit-client or\n' +
-                'call again "npm install" within its project root.'
-            )
-        }
-        getConnectionSettings(connection => {
-            if (mountpoint) {
-                mountpoint = { name: mountpoint, removeCallback: () => {} }
-            } else {
-                mountpoint = tmp.dirSync()
-            }
-            let mountOptions = { 
-                headers: { 'X-Auth-Token': connection.token },
-                cache: true,
-                blocksize: 10 * 1024 * 1024
-            }
-            if (connection.ca) {
-                mountOptions.certificate = connection.ca
-            }
-            httpfs.mount(
-                connection.url + getEntityPath(entity) + '/fs',
-                mountpoint.name, 
-                mountOptions, 
-                (err, mount) => {
-                    if (err) { 
-                        fail(err) 
-                    }
-                    let unmount = () => mount.unmount(err => {
-                        if (err) {
-                            console.error('problem unmounting filesystem:', err)
-                        } else {
-                            mountpoint.removeCallback()
-                        }
-                    })
-                    if (options.shell) {
-                        console.log('secondary shell: call "exit" to end and unmount')
-                        let sh = spawn(process.env.SHELL || 'bash', ['-i'], { stdio: 'inherit', cwd: mountpoint.name })
-                        sh.on('close', unmount)
-                    } else {
-                        console.log('press Ctrl-C to unmount')
-                        globalunmount = unmount
-                    }
-                }
-            )
-        })
-    })
 
 program
     .command('status')

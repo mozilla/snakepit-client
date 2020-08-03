@@ -49,8 +49,5 @@
     "tmp": "0.0.33",
     "websocket-stream": "^5.5.0",
     "ws": "^6.2.0"
-  },
-  "optionalDependencies": {
-    "fuse-bindings": "^2.11.2"
   }
 }
