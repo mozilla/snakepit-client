@@ -1366,7 +1366,7 @@ program
                 }
             })
             ws.on('error', err => fail('Problem opening connection to pit: ' + err))
-            ws.on('close', () => stdout.once('drain', () => process.exit(0)))
+            ws.on('close', () => stdin.isTTY ? process.exit(0) : stdout.once('drain', () => process.exit(0)))
         })
     })
 
