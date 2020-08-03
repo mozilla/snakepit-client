@@ -1,21 +1,36 @@
 #! /usr/bin/env node
-const fs = require('fs')
+const fs = require('fs-extra')
 const os = require('os')
+const net = require('net')
+const url = require('url')
 const tmp = require('tmp')
 const path = require('path')
-const program = require('commander')
+const zlib = require('zlib')
+const tar = require('tar-fs')
+const ignore = require('ignore')
+const WebSocket = require('ws')
+const websocket = require('websocket-stream')
 const request = require('request')
+const filesize = require('filesize')
+const program = require('commander')
+const multiplex = require('multiplex')
+const ProgressBar = require('progress')
+const randomstring = require("randomstring")
 const readlineSync = require('readline-sync')
 const { spawn, execFileSync } = require('child_process')
 
 const USER_FILE = '.pituser.txt'
 const CONNECT_FILE = '.pitconnect.txt'
 const REQUEST_FILE = '.pitrequest.txt'
+const JOB_ARCHIVE = '.job-upload.tar.gz'
+const JOB_COMMAND = '.job-upload.json'
 
 const githubGitPrefix = 'git@github.com:'
 const githubHttpsPrefix = 'https://github.com/'
 
 var globalunmount
+var debugHttp = false
+var userPassword
 
 function fail(message) {
     console.error('Command failed: ' + message)
@@ -61,6 +76,13 @@ function promptGroupInfo(group) {
         group.title = readlineSync.question('Group title: ')
     }
     return group
+}
+
+function getUserPassword() {
+    if (typeof userPassword !== 'string') {
+        userPassword = readlineSync.question('Please enter password: ', { hideEchoBack: true })
+    }
+    return userPassword
 }
 
 function callPit(verb, resource, content, callback, callOptions) {
@@ -111,22 +133,39 @@ function callPit(verb, resource, content, callback, callOptions) {
         if (callOptions && callOptions.offset) {
             headers['Range'] = 'bytes=' + callOptions.offset + '-'
         }
-        let creq = request[verb]({
+        if (callOptions && callOptions.headers) {
+            headers = Object.assign(headers, callOptions.headers)
+        }
+        let creqoptions = {
             url: pitUrl + '/' + resource,
             agentOptions: agentOptions,
-            headers: headers,
-            body: content ? JSON.stringify(content) : undefined
-        })
+            headers: headers
+        }
+        if (debugHttp) {
+            console.log('SENDING', verb, creqoptions.url)
+        }
+        if (content && (typeof content.pipe != 'function')) {
+            creqoptions.body = JSON.stringify(content)
+            if (debugHttp) {
+                console.log('- BODY', creqoptions.body)
+            }
+        }
+        let creq = request[verb](creqoptions)
         .on('error', err => fail('Unable to reach pit: ' + err.code))
         .on('response', res => {
+            if (debugHttp) {
+                console.log('RECEIVING CODE', res.statusCode)
+            }
             if (res.statusCode === 401) {
-                var password = readlineSync.question('Please enter password: ', { hideEchoBack: true })
                 authenticate(
                     username,
-                    password,
+                    getUserPassword(),
                     () => sendRequest(verb, resource, content, callback, callOptions)
                 )
             } else if (callOptions && callOptions.asStream) {
+                if (debugHttp) {
+                    console.log('- STREAM')
+                }
                 callback(res.statusCode, creq)
             } else {
                 let chunks = []
@@ -137,6 +176,9 @@ function callPit(verb, resource, content, callback, callOptions) {
                     if (contentType && contentType.startsWith('application/json')) {
                         try {
                             body = JSON.parse(body.toString())
+                            if (debugHttp) {
+                                console.log('- BODY', body)
+                            }
                         } catch (ex) {
                             fail('Problem parsing pit response.')
                         }
@@ -145,6 +187,9 @@ function callPit(verb, resource, content, callback, callOptions) {
                 })
             }
         })
+        if (content && (typeof content.pipe == 'function')) {
+            content.pipe(creq)
+        }
     }
 
     function authenticate(username, password, callback) {
@@ -183,7 +228,8 @@ function callPit(verb, resource, content, callback, callOptions) {
             callback({
                 url: pitUrl,
                 token: token,
-                ca: agentOptions && agentOptions.ca
+                ca: agentOptions && agentOptions.ca,
+                user: username
             })
         } else {
             sendRequest(verb, resource, content, callback, callOptions)
@@ -199,25 +245,20 @@ function callPit(verb, resource, content, callback, callOptions) {
             var userPath = 'users/' + username
             sendRequest('get', userPath + '/exists', function(code, body) {
                 if (code == 200) {
-                    console.log('The user already exists.')
-                    var password = readlineSync.question(
-                        'Please enter password (or Ctrl-C to abort): ',
-                        { hideEchoBack: true }
-                    )
-                    authenticate(username, password, sendCommand)
+                    authenticate(username, getUserPassword(), sendCommand)
                 } else {
                     console.log('Found no user of that name.')
                     var register = readlineSync.question(
-                        'Do you want to register this usename (yes|no)? ',
-                        { trueValue: ['yes', 'y'], falseValue: ['no', 'n'] }
+                        'Do you want to register a new user with this name (yN)? ',
+                        { trueValue: ['yes', 'y'] }
                     )
-                    if (register) {
+                    if (register === true) {
                         let user = promptUserInfo()
                         sendRequest('put', userPath, user, function(code, body) {
                             if (code == 200) {
                                 authenticate(username, user.password, sendCommand)
                             } else {
-                                console.error('Unable to register user.')
+                                console.error((body && body.message) || 'Unable to register user')
                                 process.exit(1)
                             }
                         })
@@ -283,7 +324,7 @@ const entityDescriptors = {
         'email': 'E-Mail address',
         'groups': (o, v) => v && ['Groups', v.join(' ')],
         'autoshare': (o, v) => v && ['Auto share', v.join(' ')],
-        'admin': 'Is administrator'
+        'admin': (o, v) => ['Is administrator', v ? 'yes' : 'no']
     },
     'node': {
         'id': 'Node name',
@@ -386,6 +427,10 @@ function printEntityHelp() {
     printLine('Accepted values for "entity": ' + Array.prototype.slice.call(arguments).join(', ') + '.')
 }
 
+function printJobNumberHelp() {
+    printLine('"jobNumber": Number of the targeted job')
+}
+
 function printPropertyHelp() {
     printLine('Properties are pairs of property-name and value of the form "property=value".')
 }
@@ -407,8 +452,8 @@ function printExample(line) {
 }
 
 function splitPair(value, separator, ...names) {
-    var obj = {}
-    var parts = value.split(separator)
+    let obj = {}
+    let parts = value.split(separator)
     for (let index in parts) {
         obj[names[index]] = parts[index]
     }
@@ -436,7 +481,9 @@ function parseEntityProperties(entity, properties) {
             if (assignment.property == 'cvd') {
                 assignment.value = assignment.value.split(',').map(v => Number(v))
             } else if (assignment.property == 'autoshare') {
-                assignment.value = assignment.value.split(',')
+                assignment.value = assignment.value.split(',').filter(x => String(x).length !== 0)
+            } else if (assignment.property == 'admin') {
+                assignment.value = assignment.value === 'yes' || assignment.value === 'y' || assignment.value === 'true'
             }
             obj[assignment.property] = assignment.value
         })
@@ -491,7 +538,7 @@ function showLog(jobNumber) {
 }
 
 function printJobGroups(groups, asDate) {
-    let fixed = 6 + 3 + (asDate ? 24 : 12) + 3 + 3 + 10 + 20 + 7
+    let fixed = 6 + 3 + (asDate ? 24 : 12) + 3 + 3 + 10 + 40 + 7
     let rest = process.stdout.columns
     if (rest && rest >= fixed) {
         rest = rest - fixed
@@ -504,7 +551,7 @@ function printJobGroups(groups, asDate) {
     writeFragment('UC%', 3, true, ' ')
     writeFragment('UM%', 3, true, ' ')
     writeFragment('USER', 10, false, ' ')
-    writeFragment('TITLE', 20, false, ' ')
+    writeFragment('TITLE', 40, false, ' ')
     writeFragment('RESOURCE', rest, false, '\n')
 
     let printJobs = (jobs, caption) => {
@@ -519,7 +566,7 @@ function printJobGroups(groups, asDate) {
                 writeFragment(Math.round(job.utilComp * 100.0), 3, true, ' ')
                 writeFragment(Math.round(job.utilMem * 100.0), 3, true, ' ')
                 writeFragment(job.user, 10, false, ' ')
-                writeFragment(job.description, 20, false, ' ')
+                writeFragment(job.description, 40, false, ' ')
                 writeFragment(job.resources, rest, false, '\n')
             }
         }
@@ -529,8 +576,244 @@ function printJobGroups(groups, asDate) {
     }
 }
 
+function getEntityPath (entitySpec) {
+    entity = parseEntity(entitySpec)
+    if (entity.type == 'home') {
+        return 'users/~'
+    }
+    if (entity.type == 'group' || entity.type == 'user' || entity.type == 'job') {
+        return '' + entity.plural + '/' + entity.id
+    }
+    if (entity.type == 'shared') {
+        return 'shared'
+    }
+    if (entitySpec.match(/^[0-9]+$/)) {
+        return getEntityPath('job:' + entitySpec);
+    }
+    fail('Unsupported entity type "' + entity.type + '"')
+}
+
+function getResourcePath (remotePath) {
+    return remotePath ? (remotePath.startsWith('/') ? remotePath.slice(1) : remotePath) : ''
+}
+
+function createProgressBar (caption, offset, size) {
+    let bar = new ProgressBar('  ' + caption + ' [:bar] :percent :speed :etas', {
+        complete: '=',
+        incomplete: ' ',
+        width: 40,
+        total: size
+    })
+    bar.tick(offset)
+    let origTick = bar.tick
+    let intervalStart = Date.now()
+    let intervalTicks = 0
+    let pastTicks = [{time: intervalStart, ticks: 0}]
+    let speed = ''
+    bar.tick = function(ticks) {
+        let now = Date.now()
+        intervalTicks += ticks
+        if (now - intervalStart > 100) {
+            pastTicks.push({time: intervalStart, ticks: intervalTicks})
+            intervalStart = now
+            intervalTicks = 0
+            pastTicks = pastTicks.reverse().slice(0, 10).reverse()
+            let transfer = pastTicks.map(t => t.ticks).reduce((t, v) => t + v, 0)
+            let timeDiff = (now - pastTicks[0].time) / 1000
+            speed = filesize(transfer / timeDiff, {round: 0}) + '/s'
+        }
+        origTick.apply(bar, [ticks, { speed: speed }])
+    }
+    return bar
+}
+
+function pullContent (entity, remotePath, localPath, options) {
+    options = options || {}
+    let entityPath = getEntityPath(entity)
+    let resource = getResourcePath(remotePath)
+    callPit('get', entityPath + '/simplefs/stats/' + resource, (code, stats) => {
+        evaluateResponse(code)
+        if (stats.isFile) {
+            if (localPath) {
+                let offset = 0
+                let localStats = fs.statSync(localPath)
+                if (fs.existsSync(localPath)) {
+                    if (localStats.isDirectory()) {
+                        let rname = remotePath.substring(remotePath.lastIndexOf('/') + 1)
+                        if (rname.length > 0) {
+                            localPath = path.join(localPath, rname)
+                        } else {
+                            fail('Cannot construct target filename.')
+                        }
+                    } else if (localStats.isFile()) {
+                        if (options.force) {
+                            console.error('Target file existing: Re-downloading...')
+                        } else if (localStats.size > stats.size) {
+                            fail('Larger local file already existing. Remove it or use force option to overwrite.')
+                        } else if (options.continue) {
+                            console.error('Local file already existing and smaller than remote file: Continuing download...')
+                            offset = localStats.size
+                        } else {
+                            let answer = readlineSync.question('Remote file larger than local one. Continue interrupted download (yN)? ', {
+                                trueValue: ['y', 'yes']
+                            })
+                            if (answer === true) {
+                                offset = localStats.size
+                            } else {
+                                fail('Aborted')
+                            }
+                        }
+                    } else {
+                        fail('Target path is neither a directory nor a file.')
+                    }
+                } else {
+                    let dirname = path.dirname(localPath)
+                    if (fs.existsSync(dirname)) {
+                        if (!fs.statSync(dirname).isDirectory()) {
+                            fail('Specified target directory is not a directory.')
+                        }
+                    } else {
+                        fail('Target directory not existing.')
+                    }
+                }
+                if (localStats.size === stats.size && !options.force) {
+                    console.error('Local file of same size already existing: Skipped download.')
+                    options.callback && options.callback()
+                } else {
+                    callPit('get', entityPath + '/simplefs/content/' + resource, (code, res) => {
+                        evaluateResponse(code)
+                        let bar = createProgressBar('downloading', offset, stats.size)
+                        res.on('data', buf => bar.tick(buf.length))
+                        let target = fs.createWriteStream(localPath, {flags: offset >  0 ? 'a' : 'w'})
+                        res.pipe(target)
+                        options.callback && target.on('finish', options.callback)
+                    }, {
+                        asStream: true,
+                        headers: { 'Range': 'bytes=' + offset + '-' }
+                    })
+                }
+            } else {
+                callPit('get', entityPath + '/simplefs/content/' + resource, (code, res) => {
+                    evaluateResponse(code)
+                    res.pipe(process.stdout)
+                    options.callback && process.stdout.on('finish', options.callback)
+                }, { asStream: true })
+            }
+        } else {
+            fail('Command only supports file transfers.')
+        }
+    })
+}
+
+function pushContent (entity, remotePath, localPath, options) {
+    options = options || {}
+    let entityPath = getEntityPath(entity)
+    let resource = getResourcePath(remotePath)
+    let localStats
+    let size = 0
+    if (localPath) {
+        if (fs.existsSync(localPath)) {
+            localStats = fs.statSync(localPath)
+            size = localStats.size
+        } else {
+            fail('Source file not found.')
+        }
+    }
+    let transferContent = (offset) => {
+        let targetPath = entityPath + '/simplefs/content/' + resource
+        if (localStats) {
+            let stream = fs.createReadStream(localPath, { start: offset })
+            let bar = createProgressBar('uploading', offset, size)
+            stream.on('data', buf => bar.tick(buf.length))
+            callPit('put', targetPath, stream, (code, res) => {
+                evaluateResponse(code)
+                options.callback && options.callback()
+            }, {
+                headers: {
+                    'Content-Type': 'application/octet-stream',
+                    'Content-Offset': offset
+                }
+            })
+        } else {
+            callPit('put', targetPath, process.stdin, (code, res) => {
+                evaluateResponse(code)
+                options.callback && options.callback()
+            }, { headers: { 'Content-Type': 'application/octet-stream' } })
+        }
+    }
+    let statsPath = entityPath + '/simplefs/stats/' + resource
+    callPit('get', statsPath, (code, stats) => {
+        if (code === 404) {
+            callPit('put', statsPath, { type: 'file' }, (code, res) => {
+                evaluateResponse(code)
+                transferContent(0)
+            })
+        } else {
+            evaluateResponse(code)
+            if (stats.isFile) {
+                if (stats.size === size) {
+                    if (options.force) {
+                        console.error('Remote file of same size as the local one - re-uploading...')
+                        transferContent(0)
+                    } else {
+                        options.callback && options.callback()
+                    }
+                } else if (stats.size < size) {
+                    if (options.continue) {
+                        console.error('Remote file smaller than local one - continuing upload...')
+                        transferContent(stats.size)
+                    } else {
+                        if (options.force) {
+                            console.error('Remote file existing - re-uploading...')
+                            transferContent(0)
+                        } else {
+                            let answer = readlineSync.question('Remote file smaller than local one. Continue interrupted upload (yN)? ', {
+                                trueValue: ['y', 'yes']
+                            })
+                            if (answer === true) {
+                                transferContent(stats.size)
+                            } else {
+                                fail('Aborted')
+                            }
+                        }
+                    }
+                } else {
+                    if (options.force) {
+                        console.error('Remote file is larger than local one - re-uploading...')
+                        transferContent(0)
+                    } else {
+                        fail('Remote file is larger than local one.')
+                    }
+                }
+            } else {
+                fail('Target path is existing, but not a file.')
+            }
+        }
+    })
+}
+
+function deleteFromEntity (entity, remotePath, callback) {
+    let entityPath = getEntityPath(entity)
+    let resource = getResourcePath(remotePath)
+    callPit('delete', entityPath + '/simplefs/stats/' + resource, (code) => {
+        evaluateResponse(code)
+        callback && callback()
+    })
+}
+
+function toWebSocketUrl (httpurl) {
+    let endpoint = url.parse(httpurl)
+    if (endpoint.protocol == 'https:') {
+        endpoint.protocol = 'wss'
+    } else {
+        endpoint.protocol = 'ws'
+    }
+    return url.format(endpoint)
+}
+
 program
     .version('0.0.1')
+    .option('-d, --debug', 'shows JSON messages sent from and to server', () => debugHttp = true)
 
 program
     .command('add <entity> [properties...]')
@@ -596,10 +879,8 @@ program
     .on('--help', function() {
         printIntro()
         printExample('pit set user:paul email=x@y.z fullname="Paul Smith"')
-        printExample('pit set node:machine1 endpoint=192.168.2.1')
         printExample('pit set alias:gtx1070 name="GeForce GTX 1070"')
         printExample('pit set group:students title="Different title"')
-        printExample('pit set job:123 autoshare=students,professors')
         printLine()
         printEntityHelp(entityUser, entityNode, entityAlias, entityGroup, entityJob)
         printPropertyHelp()
@@ -609,12 +890,33 @@ program
     })
     .action(function(entity, assignments) {
         entity = parseEntity(entity)
-        if(entity.type == 'user' || entity.type == 'node' || entity.type == 'alias' || entity.type == 'group' || entity.type == 'job') {
+        if(entity.type == 'user' || entity.type == 'alias' || entity.type == 'group') {
             let obj = parseEntityProperties(entity, assignments)
-            callPit('put', entity.plural + '/' + entity.id, obj, evaluateResponse)
+            if (entity.type == 'user' && !obj.verification) {
+                obj.verification = getUserPassword()
+            }
+            callPit('post', entity.plural + '/' + entity.id, obj, evaluateResponse)
         } else {
             fail('Unsupported entity type "' + entity.type + '"')
         }
+    })
+
+program
+    .command('passwd [username]')
+    .description('set new password')
+    .on('--help', function() {
+        printIntro()
+        printExample('pit passwd')
+        printExample('pit passwd paul')
+        printLine()
+        printLine('"username" is the name of the user, whose password should be changed. If omitted, the user\'s own password should be changed.')
+    })
+    .action(function(username) {
+        username = username || '~'
+        let obj = {}
+        obj.verification = readlineSync.question('Own password for verification: ', { hideEchoBack: true })
+        obj.password = readlineSync.questionNewPassword('New password: ')
+        callPit('post', 'users/' + username, obj, evaluateResponse)
     })
 
 program
@@ -796,6 +1098,8 @@ program
     .on('--help', function() {
         printIntro()
         printExample('pit stop 1234')
+        printLine()
+        printJobNumberHelp()
     })
     .action(function(jobNumber) {
         callPit('post', 'jobs/' + jobNumber + '/stop', evaluateResponse)
@@ -806,8 +1110,9 @@ program
     .alias('put')
     .description('enqueues current directory as new job')
     .option('-p, --private', 'prevents automatic sharing of this job')
+    .option('-a, --archive', 'forces archive based job upload of current directory')
     .option('-c, --continue <jobNumber>', 'continues job with provided number by copying its "keep" directory over to the new job')
-    .option('-d, --direct <commands>', 'directly executes provided commands through bash instead of loading .compute file')
+    .option('-e, --execute <command>', 'directly executes provided command line through bash instead of loading .compute file')
     .option('-l, --log', 'waits for and prints job\'s log output')
     .on('--help', function() {
         printIntro()
@@ -822,53 +1127,152 @@ program
         printLine('You can also provide a "' + REQUEST_FILE + '" file with the same content in your project root as default value.')
     })
     .action(function(title, clusterRequest, options) {
-        var tracking = tryCommand('git', 'rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}') || 'origin/master'
-        var ob = tracking.split('/')
-        if (ob.length != 2) {
-            fail('Problem getting tracked git remote and branch')
-        }
-        var origin = ob[0]
-        var branch = ob[1]
-        var hash = tryCommand('git', 'rev-parse', tracking)
-        if (!hash) {
-            fail('Problem getting remote branch "' + tracking + '"')
-        }
-        var originUrl = runCommand('git', 'remote', 'get-url', '--push', origin)
-        if (originUrl.startsWith(githubGitPrefix)) {
-            originUrl = githubHttpsPrefix + originUrl.substr(githubGitPrefix.length)
-        }
-        var diff = runCommand('git', 'diff', '--no-prefix', tracking)
-        if (!clusterRequest && fs.existsSync(REQUEST_FILE)) {
-            clusterRequest = fs.readFileSync(REQUEST_FILE, 'utf-8').trim()
-        }
-        if (!clusterRequest) {
-            fail('No resources requested from cluster. Please provide them either through command line or through a "' + REQUEST_FILE + '" file in your project root.')
-        }
-        if (title.length > 20) {
-            fail('Job title too long (20 characters max)')
-        }
-        callPit('post', 'jobs', {
-            origin: originUrl,
-            hash: hash,
-            diff: diff,
-            clusterRequest: clusterRequest,
-            description: title,
-            private: options.private,
-            continueJob: options.continue,
-            script: options.direct
-        }, (code, body) => {
-            if (code == 200) {
-                console.log('Job number: ' + body.id)
-                console.log('Remote:     ' + origin + ' <' + originUrl.replace(/\/\/.*\@/g, '//') + '>')
-                console.log('Hash:       ' + hash)
-                console.log('Diff LoC:   ' + diff.split('\n').length)
-                console.log('Resources:  "' + clusterRequest + '"')
-                if (options.log) {
-                    console.log()
-                    showLog(body.id)
+        getConnectionSettings(connection => {
+            if (!clusterRequest && fs.existsSync(REQUEST_FILE)) {
+                clusterRequest = fs.readFileSync(REQUEST_FILE, 'utf-8').trim()
+            }
+            if (!clusterRequest) {
+                fail('No resources requested from cluster. Please provide them either through command line or through a "' + REQUEST_FILE + '" file in your project root.')
+            }
+            if (title.length > 40) {
+                fail('Job title too long (20 characters max)')
+            }
+
+            let user = 'user:' + connection.user
+
+            let job = {
+                clusterRequest: clusterRequest,
+                description:    title,
+                private:        options.private,
+                continueJob:    options.continue,
+                script:         options.execute
+            }
+
+            let sendJob = () => {
+                console.log()
+                console.log('Scheduling as new job:')
+                printJob(job)
+                callPit('post', 'jobs', job, (code, body) => {
+                    if (code == 200) {
+                        console.log()
+                        console.log('=> job number: ' + body.id)
+                        console.log()
+                        if (job.archive) {
+                            deleteFromEntity(user, job.archive)
+                            fs.unlink(JOB_ARCHIVE)
+                            fs.unlink(JOB_COMMAND)
+                        }
+                        if (options.log) {
+                            console.log()
+                            showLog(body.id)
+                        }
+                    } else {
+                        evaluateResponse(code, body)
+                    }
+                })
+            }
+
+            let uploadJob = () => {
+                console.log()
+                console.log('Uploading job archive to user home...')
+                pushContent(user, job.archive, JOB_ARCHIVE, { continue: true, callback: sendJob })
+            }
+
+            let printJob = pj => {
+                                  console.log('- Title:            ' + pj.description)
+                                  console.log('- Resource request: ' + pj.clusterRequest)
+                                  console.log('- Private:          ' + (pj.private ? 'Yes' : 'No'))
+                pj.continueJob && console.log('- Continues job:    ' + pj.continueJob)
+                pj.script      && console.log('- Command:          ' + pj.script)
+                pj.origin      && console.log('- Remote:           ' + pj.origin.replace(/\/\/.*@/g, '//'))
+                pj.hash        && console.log('- Hash:             ' + pj.hash)
+                pj.diff        && console.log('- Diff:             ' + pj.diff.split('\n').length + ' LoC')
+                pj.archive     && console.log('- Archive:          ' + pj.archive)
+            }
+
+            if (!options.archive && fs.existsSync('.git')) {
+                console.log('Scheduling job through tracked git branch of current checkout')
+                console.log()
+                console.log('Reading tracking information...')
+                var tracking = tryCommand('git', 'rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}') || 'origin/master'
+                var ob = tracking.split('/')
+                if (ob.length != 2) {
+                    fail('Problem getting tracked git remote and branch')
                 }
+                var origin = ob[0]
+                var branch = ob[1]
+                var hash = tryCommand('git', 'rev-parse', tracking)
+                if (!hash) {
+                    fail('Problem getting remote branch "' + tracking + '"')
+                }
+                var originUrl = runCommand('git', 'remote', 'get-url', '--push', origin)
+                if (originUrl.startsWith(githubGitPrefix)) {
+                    originUrl = githubHttpsPrefix + originUrl.substr(githubGitPrefix.length)
+                }
+                var diff = runCommand('git', 'diff', '--no-prefix', tracking)
+                job = Object.assign(job, {
+                    origin: originUrl,
+                    hash:   hash,
+                    diff:   diff,
+                })
+                sendJob()
             } else {
-                evaluateResponse(code, body)
+                console.log('Scheduling job through archive of current directory')
+                console.log()
+                if (fs.existsSync(JOB_ARCHIVE)) {
+                    if (fs.existsSync(JOB_COMMAND)) {
+                        let incompleteJob = JSON.parse(fs.readFileSync(JOB_COMMAND))
+                        console.log('Found incomplete job upload in current directory (.job-upload*):')
+                        printJob(incompleteJob)
+                        let answer = readlineSync.question('Continue incomplete upload (y) or delete it and proceed scheduling a new job (N)? ', {
+                            trueValue: ['y', 'yes']
+                        })
+                        if (answer) {
+                            console.log('Continuing interrupted job upload...')
+                            job = incompleteJob
+                        } else {
+                            console.log('Removing archive of interrupted job upload...')
+                            fs.unlinkSync(JOB_ARCHIVE)
+                        }
+                    } else {
+                        fail('Found job upload archive ' + JOB_ARCHIVE + ' without meta data. Please delete or move before continuing.')
+                    }
+                }
+                if (!fs.existsSync(JOB_ARCHIVE)) {
+                    console.log('Compressing current directory as job archive...')
+                    job.archive = '.upload-' + randomstring.generate() + '.tar.gz'
+                    fs.writeFileSync(JOB_COMMAND, JSON.stringify(job))
+                    let tmpFile = tmp.tmpNameSync()
+                    let archive = fs.createWriteStream(tmpFile)
+                    const ig = ignore()
+                    ig.add('.git')
+                    ig.add('.pituser.txt')
+                    ig.add(JOB_ARCHIVE)
+                    ig.add(JOB_COMMAND)
+                    if (fs.existsSync('.gitignore')) {
+                        ig.add(fs.readFileSync('.gitignore').toString())
+                    }
+                    if (fs.existsSync('.pitignore')) {
+                        ig.add(fs.readFileSync('.pitignore').toString())
+                    }
+                    tar .pack('.', {
+                            ignore: name => {
+                                if (ig.ignores(name)) {
+                                    console.log('Ignoring', name)
+                                    return true
+                                }
+                                console.log('Archiving ' + name + '...')
+                            }
+                        })
+                        .pipe(zlib.Gzip())
+                        .pipe(archive)
+                    archive.on('finish', () => {
+                        fs.renameSync(tmpFile, JOB_ARCHIVE)
+                        uploadJob()
+                    })
+                } else {
+                    uploadJob()
+                }
             }
         })
     })
@@ -876,53 +1280,172 @@ program
 program
     .command('log <jobNumber>')
     .description('show job\'s log')
-    .option('-f, --follow', 'continuously shows further log output if the job is still running')
     .on('--help', function() {
         printIntro()
-        printExample('pit log -f')
+        printExample('pit log 1234')
         printLine()
+        printJobNumberHelp()
+    })
+    .action(jobNumber => showLog(jobNumber))
+
+program
+    .command('exec <jobNumber> -- ...')
+    .usage('[options] <jobNumber> -- cmd arg1 ... argN')
+    .description('execute command on a job\'s worker')
+    .option('-w, --worker <workerIndex>', 'index of the target worker (defaults to 0)')
+    .on('--help', function() {
+        printIntro()
+        printExample('pit exec 1234 -- bash')
+        printExample('pit exec 1234 -- ls -la /')
+        printExample('pit exec -w 1 1234 -- cat /data/rw/pit/src/.compute >1234.compute')
+        printLine()
+        printJobNumberHelp()
     })
     .action((jobNumber, options) => {
-        showLog(jobNumber)
+        let instance = '' + (options.worker || 0)
+        getConnectionSettings(connection => {
+            let endpoint = toWebSocketUrl(connection.url)
+            let stdin  = process.stdin
+            let stdout = process.stdout
+            let stderr = process.stderr
+
+            let context = JSON.stringify({
+                command: shellCommand,
+                environment: {
+                    TERM: process.env.TERM
+                },
+                interactive: !!stdin.setRawMode,
+                width: stdout.columns,
+                height: stdout.rows
+            })
+            let ws = new WebSocket(endpoint + 'jobs/' + jobNumber + '/instances/' + instance + '/exec?context=' + encodeURIComponent(context), {
+                headers: { 'X-Auth-Token': connection.token },
+                ca: connection.ca
+            })
+
+
+            if (stdin.setRawMode) {
+                stdin.setRawMode(true)
+                stdin.resume()
+            }
+            let buffers = []
+            stdin.on('data', data => {
+                if ( data === '\u0003' ) {
+                    process.exit()
+                }
+                let buffer = Buffer.concat([new Buffer([1]), data])
+                if (buffers) {
+                    buffers.push(buffer)
+                } else {
+                    ws.send(buffer)
+                }
+            })
+
+            stdout.on('resize', () => {
+                let data = JSON.stringify({
+                    "command": "window-resize",
+                    "args": {
+                        "width": "" + stdout.columns,
+                        "height": "" + stdout.rows
+                    }
+                })
+                ws.send(Buffer.concat([new Buffer([0]), Buffer.from(data)]))
+            })
+
+            ws.on('open', () => {
+                for (let buffer of buffers) {
+                    ws.send(buffer)
+                }
+                buffers = undefined
+            })
+            ws.on('message', data => {
+                if (data[0] == 1) {
+                    stdout.write(data.slice(1))
+                } else if (data[0] == 2) {
+                    stderr.write(data.slice(1))
+                }
+            })
+            ws.on('error', err => fail('Problem opening connection to pit: ' + err))
+            ws.on('close', () => process.exit(0))
+        })
     })
 
 program
-    .command('download <jobNumber>')
-    .description('downloads job directory as .tar.gz archive')
+    .command('forward <jobNumber> [ports...]')
+    .description('forward ports of a job\'s worker to localhost')
+    .option('-w, --worker <workerIndex>', 'index of the target worker (defaults to 0)')
     .on('--help', function() {
         printIntro()
-        printExample('pit download 1234')
+        printExample('pit forward 1234 8080:80 7022:22')
+        printExample('pit forward 1234 8080')
+        printLine()
+        printJobNumberHelp()
+        printLine('"ports": All the ports to forward. Each port has to be provided either as one number (local and remote port being the same) or as a colon-separated pair where the first one is the local and the second one the remote counter-part.')
     })
-    .action((jobNumber) => {
-        let filename = 'job' + jobNumber + '.tar.gz'
-        if (fs.existsSync(filename)) {
-            fail('Unable to download: File "' + filename + '" already exists')
+    .action((jobNumber, ports, options) => {
+        let instance = '' + (options.worker || 0)
+        let portPairs = {}
+        for (let port of ports) {
+            let [localPort, remotePort] = port.split(':').map(x => Number(x))
+            remotePort = remotePort || localPort
+            if (!localPort) {
+                fail('Wrong port pair format')
+            }
+            portPairs[localPort] = remotePort
         }
-        callPit('get', 'jobs/' + jobNumber + '/targz', (code, res) => {
-            evaluateResponse(code)
-            res.pipe(fs.createWriteStream(filename))
-        }, { asStream: true })
+        getConnectionSettings(connection => {
+            let endpoint = toWebSocketUrl(connection.url)
+            let ws = websocket(endpoint + 'jobs/' + jobNumber + '/instances/' + instance + '/forward', {
+                headers: { 'X-Auth-Token': connection.token },
+                ca: connection.ca
+            })
+            let mp = multiplex()
+            mp.pipe(ws)
+            ws.pipe(mp)
+            let idc = 0
+            let onConnection = socket => {
+                let remotePort = portPairs[socket.localPort]
+                let id = idc++
+                let stream = mp.createStream(id + '-' + remotePort)
+                socket.pipe(stream)
+                stream.pipe(socket)
+                stream.on('error', err => { console.error('Remote', err.message || 'problem'); socket.end() })
+            }
+            for (let localPort of Object.keys(portPairs)) {
+                let remotePort = portPairs[localPort]
+                console.log('Forwarding port ' + remotePort + ' of worker ' + instance + ' to port ' + localPort + ' on localhost...')
+                let server = net.createServer(onConnection)
+                server.listen(localPort, 'localhost')
+            }
+            console.log('Hit Ctrl-C to stop forwarding.')
+            mp.on('error', err => fail('Problem with remote end - Closing'))
+            ws.on('error', err => fail('Problem opening connection to pit: ' + err))
+        })
     })
 
 program
-    .command('ls <jobNumber> [path]')
+    .command('ls <entity> [remotePath]')
     .description('lists contents within a job directory')
     .on('--help', function() {
         printIntro()
-        printExample('pit mount 1234 ./job1234')
+        printExample('pit ls job:1234 sub-dir')
+        printExample('pit ls home')
+        printExample('pit ls group:students path/to/some/group/data')
+        printExample('pit ls shared path/to/some/shared/data')
         printLine()
-        printLine('"jobNumber" is the number of the job who\'s job directory should be accessed.')
-        printLine('"path" is the path to list within the job directory.')
+        printLine('"entity" is the entity whose data directory should be accessed')
+        printEntityHelp('home', entityUser, entityJob, entityGroup, 'shared')
+        printLine('"remotePath" is the path to list within the remote data directory.')
     })
-    .action((jobNumber, path) => {
-        let job = 'jobs/' + jobNumber + '/'
-        let resource = path ? (path.startsWith('/') ? path.slice(1) : path) : ''
-        callPit('get', job + 'stats/' + resource, (code, stats) => {
+    .action((entity, remotePath) => {
+        let entityPath = getEntityPath(entity)
+        let resource = getResourcePath(remotePath)
+        callPit('get', entityPath + '/simplefs/stats/' + resource, (code, stats) => {
             evaluateResponse(code)
             if (stats.isFile) {
                 console.log('F ' + resource)
             } else {
-                callPit('get', job + 'content/' + resource, (code, contents) => {
+                callPit('get', entityPath + '/simplefs/content/' + resource, (code, contents) => {
                     evaluateResponse(code)
                     for(let dir of contents.dirs) {
                         console.log('D ' + dir)
@@ -936,56 +1459,86 @@ program
     })
 
 program
-    .command('cp <jobNumber> <jobPath> <fsPath>')
-    .description('copies contents within from job directory to local file system')
+    .command('pull <entity> <remotePath> [localPath]')
+    .alias('cp')
+    .option('-f, --force', 'will overwrite existing target file if existing - always starting download from scratch')
+    .option('-c, --continue', 'will try to continue interrupted download - starting from scratch, if target is not existing')
+    .description('copies contents from an entity\'s file to a local file or stdout')
     .on('--help', function() {
         printIntro()
-        printExample('pit cp 1234 keep/checkpoint-0001.bin ./checkpoint.bin')
+        printExample('pit pull job:1234 keep/checkpoint-0001.bin ./checkpoint.bin')
+        printExample('pit pull home data/corpus.data ./corpus.data')
         printLine()
-        printLine('"jobNumber" is the number of the job who\'s job directory should be accessed.')
-        printLine('"jobPath" is the source path within the job directory.')
-        printLine('"fsPath" is the destination path within local filesystem.')
+        printLine('"entity" is the entity whose data directory should be accessed')
+        printEntityHelp('home', entityUser, entityJob, entityGroup, 'shared')
+        printLine('"remotePath" is the source path within the remote data directory.')
+        printLine('"localPath" is the destination path within the local filesystem. If omitted, data will be written to stdout.')
     })
-    .action((jobNumber, jobPath, fsPath) => {
-        let job = 'jobs/' + jobNumber + '/'
-        let resource = jobPath ? (jobPath.startsWith('/') ? jobPath.slice(1) : jobPath) : ''
-        callPit('get', job + 'stats/' + resource, (code, stats) => {
+    .action((entity, remotePath, localPath, options) => pullContent(entity, remotePath, localPath, options))
+
+program
+    .command('cat <entity> <remotePath>')
+    .description('copies contents from an entity\'s directory to stdout')
+    .on('--help', function() {
+        printIntro()
+        printExample('pit cat job:1234 keep/results.txt')
+        printExample('pit cat home data/some.txt')
+        printLine()
+        printLine('"entity" is the entity whose data directory should be accessed')
+        printEntityHelp('home', entityUser, entityJob, entityGroup, 'shared')
+        printLine('"remotePath" is the source path within the remote data directory.')
+    })
+    .action((entity, remotePath) => pullContent(entity, remotePath))
+
+program
+    .command('push <entity> <remotePath> [localPath]')
+    .option('-f, --force', 'will overwrite existing target file if existing - always starting upload from scratch')
+    .option('-c, --continue', 'will try to continue interrupted upload - starting from scratch, if target is not existing')
+    .description('copies contents from stdin or local file system to a file in an entity\'s tree')
+    .on('--help', function() {
+        printIntro()
+        printExample('pit push group:students some/dir/data.bin ./data.bin')
+        printExample('generate-some-data.py | pit push home keeping/some.data')
+        printLine()
+        printLine('"entity" is the entity whose data directory should be targeted')
+        printEntityHelp('home', entityUser, entityGroup)
+        printLine('"remotePath" is the target path within the remote entity\'s directory.')
+        printLine('"localPath" is the path to a source file within the local filesystem. If omitted, data will be read from stdin.')
+    })
+    .action((entity, remotePath, localPath, options) => pushContent(entity, remotePath, localPath, options))
+
+program
+    .command('mkdir <entity> <remotePath>')
+    .description('creates an entity directory')
+    .on('--help', function() {
+        printIntro()
+        printExample('pit mkdir group:students some/dir')
+        printLine()
+        printLine('"entity" is the entity whose data directory should be targeted')
+        printEntityHelp('home', entityUser, entityGroup)
+        printLine('"remotePath" is the target path within the remote entity\'s tree.')
+    })
+    .action((entity, remotePath) => {
+        let entityPath = getEntityPath(entity)
+        let resource = getResourcePath(remotePath)
+        callPit('put', entityPath + '/simplefs/stats/' + resource, { type: 'directory' }, (code) => {
             evaluateResponse(code)
-            if (stats.isFile) {
-                let offset = 0
-                if (fs.existsSync(fsPath)) {
-                    let localStats = fs.statSync(fsPath)
-                    if (localStats.isDirectory()) {
-                        let rname = jobPath.substring(jobPath.lastIndexOf('/') + 1)
-                        if (rname.length > 0) {
-                            fsPath = path.join(fsPath, rname)
-                        } else {
-                            fail('Cannot construct target filename.')
-                        }
-                    } else if (localStats.isFile()) {
-                        offset = localStats.size
-                    } else {
-                        fail('Cannot write to target.')
-                    }
-                } else {
-                    let dirname = path.dirname(fsPath)
-                    if (fs.existsSync(dirname)) {
-                        if (!fs.statSync(dirname).isDirectory()) {
-                            fail('Target directory not a directory.')
-                        }
-                    } else {
-                        fail('Target directory not existing.')
-                    }
-                }
-                callPit('get', job + 'content/' + resource, (code, res) => {
-                    evaluateResponse(code)
-                    res.pipe(fs.createWriteStream(fsPath))
-                }, { asStream: true }) // offset: offset
-            } else {
-                fail('At the moment only file copying is supported.')
-            }
         })
     })
+
+program
+    .command('delete <entity> <remotePath>')
+    .description('deletes a file or directory within an entity\'s tree')
+    .on('--help', function() {
+        printIntro()
+        printExample('pit delete group:students some/dir')
+        printExample('pit delete home some/file.txt')
+        printLine()
+        printLine('"entity" is the entity whose data directory should be targeted')
+        printEntityHelp('home', entityUser, entityGroup)
+        printLine('"remotePath" is the target path within the remote entity\'s tree.')
+    })
+    .action((entity, remotePath) => deleteFromEntity(entity, remotePath))
 
 program
     .command('mount <entity> [mountpoint]')
@@ -1018,17 +1571,6 @@ program
                 'call again "npm install" within its project root.'
             )
         }
-        let endpoint
-        entity = parseEntity(entity)
-        if (entity.type == 'home') {
-            endpoint = '/users/~/fs' 
-        } else if (entity.type == 'group' || entity.type == 'user' || entity.type == 'job') {
-            endpoint = '/' + entity.plural + '/' + entity.id + '/fs'
-        } else if (entity.type == 'shared') {
-            endpoint = '/shared'
-        } else {
-            fail('Unsupported entity type "' + entity.type + '"')
-        }
         getConnectionSettings(connection => {
             if (mountpoint) {
                 mountpoint = { name: mountpoint, removeCallback: () => {} }
@@ -1044,7 +1586,7 @@ program
                 mountOptions.certificate = connection.ca
             }
             httpfs.mount(
-                connection.url + endpoint,
+                connection.url + getEntityPath(entity) + '/fs',
                 mountpoint.name, 
                 mountOptions, 
                 (err, mount) => {
@@ -1101,9 +1643,17 @@ program
         fail("unknown command");
     })
 
-program.parse(process.argv)
+var argv = process.argv
+var shellCommand
+var dashSplitter = argv.indexOf('--')
+if (dashSplitter >= 0) {
+    shellCommand = argv.slice(dashSplitter + 1)
+    argv = argv.slice(0, dashSplitter)
+}
 
-if (!process.argv.slice(2).length) {
+program.parse(argv)
+
+if (!argv.slice(2).length) {
     program.outputHelp();
 }
 
