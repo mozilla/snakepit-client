@@ -1314,7 +1314,7 @@ program
                 environment: {
                     TERM: process.env.TERM
                 },
-                interactive: !!stdin.setRawMode,
+                interactive: !!stdin.isTTY && !!stdout.isTTY,
                 width: stdout.columns,
                 height: stdout.rows
             })
@@ -1366,7 +1366,7 @@ program
                 }
             })
             ws.on('error', err => fail('Problem opening connection to pit: ' + err))
-            ws.on('close', () => process.exit(0))
+            ws.on('close', () => stdout.once('drain', () => process.exit(0)))
         })
     })
 
