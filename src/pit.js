@@ -28,7 +28,6 @@ const JOB_COMMAND = '.job-upload.json'
 const githubGitPrefix = 'git@github.com:'
 const githubHttpsPrefix = 'https://github.com/'
 
-var globalunmount
 var debugHttp = false
 var userPassword
 
@@ -142,19 +141,19 @@ function callPit(verb, resource, content, callback, callOptions) {
             headers: headers
         }
         if (debugHttp) {
-            console.log('SENDING', verb, creqoptions.url)
+            console.error('SENDING', verb, creqoptions.url)
         }
         if (content && (typeof content.pipe != 'function')) {
             creqoptions.body = JSON.stringify(content)
             if (debugHttp) {
-                console.log('- BODY', creqoptions.body)
+                console.error('- BODY', creqoptions.body)
             }
         }
         let creq = request[verb](creqoptions)
         .on('error', err => fail('Unable to reach pit: ' + err.code))
         .on('response', res => {
             if (debugHttp) {
-                console.log('RECEIVING CODE', res.statusCode)
+                console.error('RECEIVING CODE', res.statusCode)
             }
             if (res.statusCode === 401) {
                 authenticate(
@@ -164,7 +163,7 @@ function callPit(verb, resource, content, callback, callOptions) {
                 )
             } else if (callOptions && callOptions.asStream) {
                 if (debugHttp) {
-                    console.log('- STREAM')
+                    console.error('- STREAM')
                 }
                 callback(res.statusCode, creq)
             } else {
@@ -177,7 +176,7 @@ function callPit(verb, resource, content, callback, callOptions) {
                         try {
                             body = JSON.parse(body.toString())
                             if (debugHttp) {
-                                console.log('- BODY', body)
+                                console.error('- BODY', body)
                             }
                         } catch (ex) {
                             fail('Problem parsing pit response.')
@@ -202,7 +201,7 @@ function callPit(verb, resource, content, callback, callOptions) {
                         process.exit(1)
                     } else {
                         if (callback instanceof Function) {
-                            callback()
+                            callback(token)
                         }
                     }
                 })
@@ -229,7 +228,8 @@ function callPit(verb, resource, content, callback, callOptions) {
                 url: pitUrl,
                 token: token,
                 ca: agentOptions && agentOptions.ca,
-                user: username
+                user: username,
+                authenticate: (cb) => authenticate(username, getUserPassword(), cb)
             })
         } else {
             sendRequest(verb, resource, content, callback, callOptions)
@@ -240,14 +240,14 @@ function callPit(verb, resource, content, callback, callOptions) {
         userFile = path.join(os.homedir(), userFile)
         if(!fs.existsSync(userFile)) {
             userFile = USER_FILE
-            console.log('No user info found. Seems like a new user or first time login from this machine.')
+            console.error('No user info found. Seems like a new user or first time login from this machine.')
             username = readlineSync.question('Please enter an existing or new username: ')
             var userPath = 'users/' + username
             sendRequest('get', userPath + '/exists', function(code, body) {
                 if (code == 200) {
                     authenticate(username, getUserPassword(), sendCommand)
                 } else {
-                    console.log('Found no user of that name.')
+                    console.error('Found no user of that name.')
                     var register = readlineSync.question(
                         'Do you want to register a new user with this name (yN)? ',
                         { trueValue: ['yes', 'y'] }
@@ -279,6 +279,31 @@ function callPit(verb, resource, content, callback, callOptions) {
 
 function getConnectionSettings(callback) {
     callPit('connection', null, null, callback)
+}
+
+function openWebSocket(endpoint, callback, asStream) {
+    getConnectionSettings(connection => {
+        let wsImpl = asStream ? websocket : function(...args) { return new WebSocket(...args) }
+        options = {
+            headers: { 'X-Auth-Token': connection.token },
+            ca: connection.ca
+        }
+        endpoint = toWebSocketUrl(connection.url) + endpoint
+        let ws = wsImpl(endpoint, options)
+        ws.on('error', err => {
+            if (err['status-code'] == 401) {
+                connection.authenticate(token => {
+                    options.headers['X-Auth-Token'] = token
+                    let ws = wsImpl(endpoint, options)
+                    ws.on('open', () => callback(ws))
+                    ws.on('error', err => fail('Problem opening authenticated connection to pit: ' + err))
+                })
+            } else {
+                fail('Problem opening connection to pit: ' + err)
+            }
+        })
+        asStream ? callback(ws) : ws.on('open', () => callback(ws))
+    })
 }
 
 const jobStates = {
@@ -414,7 +439,7 @@ const httpCodes = {
 }
 
 function printLine(msg) {
-    console.log(msg ? (indent + (msg || '')) : '')
+    console.error(msg ? (indent + (msg || '')) : '')
 }
 
 function printIntro() {
@@ -557,7 +582,7 @@ function printJobGroups(groups, asDate) {
     let printJobs = (jobs, caption) => {
         if (jobs.length > 0) {
             if (caption) {
-                console.log(caption + ':')
+                console.error(caption + ':')
             }
             for(let job of jobs) {
                 writeFragment(job.id, 6, true, ' ')
@@ -941,7 +966,7 @@ program
         if(descriptor) {
             callPit('get', entity.plural + '/' + entity.id, function(code, body) {
                 if (code == 200) {
-                    console.log(body[property])
+                    console.error(body[property])
                 } else {
                     evaluateResponse(code, body)
                 }
@@ -1149,14 +1174,14 @@ program
             }
 
             let sendJob = () => {
-                console.log()
-                console.log('Scheduling as new job:')
+                console.error()
+                console.error('Scheduling as new job:')
                 printJob(job)
                 callPit('post', 'jobs', job, (code, body) => {
                     if (code == 200) {
-                        console.log()
-                        console.log('=> job number: ' + body.id)
-                        console.log()
+                        console.error()
+                        console.error('=> job number: ' + body.id)
+                        console.error()
                         if (job.archive) {
                             deleteFromEntity(user, job.archive)
                             fs.unlink(JOB_ARCHIVE)
@@ -1173,27 +1198,27 @@ program
             }
 
             let uploadJob = () => {
-                console.log()
-                console.log('Uploading job archive to user home...')
+                console.error()
+                console.error('Uploading job archive to user home...')
                 pushContent(user, job.archive, JOB_ARCHIVE, { continue: true, callback: sendJob })
             }
 
             let printJob = pj => {
-                                  console.log('- Title:            ' + pj.description)
-                                  console.log('- Resource request: ' + pj.clusterRequest)
-                                  console.log('- Private:          ' + (pj.private ? 'Yes' : 'No'))
-                pj.continueJob && console.log('- Continues job:    ' + pj.continueJob)
-                pj.script      && console.log('- Command:          ' + pj.script)
-                pj.origin      && console.log('- Remote:           ' + pj.origin.replace(/\/\/.*@/g, '//'))
-                pj.hash        && console.log('- Hash:             ' + pj.hash)
-                pj.diff        && console.log('- Diff:             ' + pj.diff.split('\n').length + ' LoC')
-                pj.archive     && console.log('- Archive:          ' + pj.archive)
+                                  console.error('- Title:            ' + pj.description)
+                                  console.error('- Resource request: ' + pj.clusterRequest)
+                                  console.error('- Private:          ' + (pj.private ? 'Yes' : 'No'))
+                pj.continueJob && console.error('- Continues job:    ' + pj.continueJob)
+                pj.script      && console.error('- Command:          ' + pj.script)
+                pj.origin      && console.error('- Remote:           ' + pj.origin.replace(/\/\/.*@/g, '//'))
+                pj.hash        && console.error('- Hash:             ' + pj.hash)
+                pj.diff        && console.error('- Diff:             ' + pj.diff.split('\n').length + ' LoC')
+                pj.archive     && console.error('- Archive:          ' + pj.archive)
             }
 
             if (!options.archive && fs.existsSync('.git')) {
-                console.log('Scheduling job through tracked git branch of current checkout')
-                console.log()
-                console.log('Reading tracking information...')
+                console.error('Scheduling job through tracked git branch of current checkout')
+                console.error()
+                console.error('Reading tracking information...')
                 var tracking = tryCommand('git', 'rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}') || 'origin/master'
                 var ob = tracking.split('/')
                 if (ob.length != 2) {
@@ -1217,21 +1242,21 @@ program
                 })
                 sendJob()
             } else {
-                console.log('Scheduling job through archive of current directory')
-                console.log()
+                console.error('Scheduling job through archive of current directory')
+                console.error()
                 if (fs.existsSync(JOB_ARCHIVE)) {
                     if (fs.existsSync(JOB_COMMAND)) {
                         let incompleteJob = JSON.parse(fs.readFileSync(JOB_COMMAND))
-                        console.log('Found incomplete job upload in current directory (.job-upload*):')
+                        console.error('Found incomplete job upload in current directory (.job-upload*):')
                         printJob(incompleteJob)
                         let answer = readlineSync.question('Continue incomplete upload (y) or delete it and proceed scheduling a new job (N)? ', {
                             trueValue: ['y', 'yes']
                         })
                         if (answer) {
-                            console.log('Continuing interrupted job upload...')
+                            console.error('Continuing interrupted job upload...')
                             job = incompleteJob
                         } else {
-                            console.log('Removing archive of interrupted job upload...')
+                            console.error('Removing archive of interrupted job upload...')
                             fs.unlinkSync(JOB_ARCHIVE)
                         }
                     } else {
@@ -1239,7 +1264,7 @@ program
                     }
                 }
                 if (!fs.existsSync(JOB_ARCHIVE)) {
-                    console.log('Compressing current directory as job archive...')
+                    console.error('Compressing current directory as job archive...')
                     job.archive = '.upload-' + randomstring.generate() + '.tar.gz'
                     fs.writeFileSync(JOB_COMMAND, JSON.stringify(job))
                     let tmpFile = tmp.tmpNameSync()
@@ -1258,10 +1283,10 @@ program
                     tar .pack('.', {
                             ignore: name => {
                                 if (ig.ignores(name)) {
-                                    console.log('Ignoring', name)
+                                    console.error('Ignoring', name)
                                     return true
                                 }
-                                console.log('Archiving ' + name + '...')
+                                console.error('Archiving ' + name + '...')
                             }
                         })
                         .pipe(zlib.Gzip())
@@ -1303,42 +1328,35 @@ program
     })
     .action((jobNumber, options) => {
         let instance = '' + (options.worker || 0)
-        getConnectionSettings(connection => {
-            let endpoint = toWebSocketUrl(connection.url)
-            let stdin  = process.stdin
-            let stdout = process.stdout
-            let stderr = process.stderr
-
-            let context = JSON.stringify({
-                command: shellCommand,
-                environment: {
-                    TERM: process.env.TERM
-                },
-                interactive: !!stdin.isTTY && !!stdout.isTTY,
-                width: stdout.columns,
-                height: stdout.rows
-            })
-            let ws = new WebSocket(endpoint + 'jobs/' + jobNumber + '/instances/' + instance + '/exec?context=' + encodeURIComponent(context), {
-                headers: { 'X-Auth-Token': connection.token },
-                ca: connection.ca
-            })
-
+        let stdin = process.stdin
+        let stdout = process.stdout
+        let stderr = process.stderr
+        let context = JSON.stringify({
+            command: shellCommand,
+            environment: {
+                TERM: process.env.TERM
+            },
+            interactive: !!stdin.isTTY && !!stdout.isTTY,
+            width: stdout.columns,
+            height: stdout.rows
+        })
+        openWebSocket(
+            'jobs/' + jobNumber +
+            '/instances/' + instance +
+            '/exec?context=' + encodeURIComponent(context), ws => {
 
             if (stdin.setRawMode) {
                 stdin.setRawMode(true)
                 stdin.resume()
             }
+
             let buffers = []
             stdin.on('data', data => {
-                if ( data === '\u0003' ) {
+                if (data === '\u0003') {
                     process.exit()
                 }
                 let buffer = Buffer.concat([new Buffer.from([1]), data])
-                if (buffers) {
-                    buffers.push(buffer)
-                } else {
-                    ws.send(buffer)
-                }
+                ws.send(buffer)
             })
 
             stdout.on('resize', () => {
@@ -1352,12 +1370,8 @@ program
                 ws.send(Buffer.concat([new Buffer([0]), Buffer.from(data)]))
             })
 
-            ws.on('open', () => {
-                for (let buffer of buffers) {
-                    ws.send(buffer)
-                }
-                buffers = undefined
-            })
+            stdout.on('error', process.exit)
+
             ws.on('message', data => {
                 if (data[0] == 1) {
                     stdout.write(data.slice(1))
@@ -1365,8 +1379,8 @@ program
                     stderr.write(data.slice(1))
                 }
             })
-            ws.on('error', err => fail('Problem opening connection to pit: ' + err))
-            ws.on('close', () => stdin.isTTY ? process.exit(0) : stdout.once('drain', () => process.exit(0)))
+
+            ws.on('close', () => stdout.isTTY ? process.exit(0) : stdout.once('drain', () => process.exit(0)))
         })
     })
 
@@ -1393,12 +1407,8 @@ program
             }
             portPairs[localPort] = remotePort
         }
-        getConnectionSettings(connection => {
-            let endpoint = toWebSocketUrl(connection.url)
-            let ws = websocket(endpoint + 'jobs/' + jobNumber + '/instances/' + instance + '/forward', {
-                headers: { 'X-Auth-Token': connection.token },
-                ca: connection.ca
-            })
+        openWebSocket('jobs/' + jobNumber + '/instances/' + instance + '/forward', ws => {
+            console.error('Start')
             let mp = multiplex()
             mp.pipe(ws)
             ws.pipe(mp)
@@ -1413,14 +1423,14 @@ program
             }
             for (let localPort of Object.keys(portPairs)) {
                 let remotePort = portPairs[localPort]
-                console.log('Forwarding port ' + remotePort + ' of worker ' + instance + ' to port ' + localPort + ' on localhost...')
+                console.error('Forwarding port ' + remotePort + ' of worker ' + instance + ' to port ' + localPort + ' on localhost...')
                 let server = net.createServer(onConnection)
                 server.listen(localPort, 'localhost')
             }
-            console.log('Hit Ctrl-C to stop forwarding.')
+            console.error('Hit Ctrl-C to stop forwarding.')
             mp.on('error', err => fail('Problem with remote end - Closing'))
             ws.on('error', err => fail('Problem opening connection to pit: ' + err))
-        })
+        }, true)
     })
 
 program
@@ -1593,20 +1603,6 @@ function writeFragment(text, len, right, padding) {
     process.stdout.write(text + padding)
 }
 
-function unmount() {
-    if (globalunmount) {
-        console.log('\runmounting...')
-        globalunmount()
-        globalunmount = null
-    }
-}
-
 process.on('SIGINT', () => {
-    unmount()
     process.exit(0)
 })
-
-process.on('exit', () => {
-    unmount()
-})
-
