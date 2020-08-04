@@ -1292,7 +1292,7 @@ program
                         .pipe(zlib.Gzip())
                         .pipe(archive)
                     archive.on('finish', () => {
-                        fs.renameSync(tmpFile, JOB_ARCHIVE)
+                        fs.moveSync(tmpFile, JOB_ARCHIVE)
                         uploadJob()
                     })
                 } else {
